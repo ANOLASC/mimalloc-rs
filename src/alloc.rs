@@ -1,0 +1,97 @@
+// api
+
+use std::{ffi::c_void, ptr, sync::Arc};
+
+use crate::{
+    mimalloc_internal::{_mi_heap_get_free_small_page, _mi_thread_id, get_default_heap},
+    mimalloc_types::{MiBlock, MiHeap, MiPage, MI_PADDING, MI_PADDING_SIZE, MI_SMALL_SIZE_MAX},
+};
+
+#[no_mangle]
+pub extern "C" fn mi_malloc(size: usize) -> *mut c_void {
+    mi_heap_malloc(get_default_heap(), size)
+}
+
+#[no_mangle]
+pub extern "C" fn mi_calloc(count: usize, size: usize) -> *mut c_void {
+    ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn mi_free(p: *mut c_void) {}
+
+#[inline]
+fn mi_heap_malloc(heap: Box<MiHeap>, size: usize) -> *mut c_void {
+    _mi_heap_malloc_zero(heap, size, false)
+}
+
+#[inline]
+fn _mi_heap_malloc_zero(heap: Box<MiHeap>, size: usize, zero: bool) -> *mut c_void {
+    _mi_heap_malloc_zero_ex(heap, size, zero, 0)
+}
+
+#[inline]
+fn _mi_heap_malloc_zero_ex(
+    heap: Box<MiHeap>,
+    size: usize,
+    zero: bool,
+    huge_alignment: usize,
+) -> *mut c_void {
+    if size <= MI_SMALL_SIZE_MAX {
+        // fast path
+        debug_assert!(huge_alignment == 0);
+        return mi_heap_malloc_small_zero(heap, size, zero);
+    } else {
+        // slow path
+        // TODO To be implemented
+        todo!("slow path does not implement now");
+    }
+}
+
+#[inline]
+fn mi_heap_malloc_small_zero(mut heap: Box<MiHeap>, size: usize, zero: bool) -> *mut c_void {
+    if cfg!(debug_assertions) {
+        let tid = _mi_thread_id();
+        debug_assert!(heap.thread_id == 0 || heap.thread_id == tid);
+    }
+
+    let size = if MI_PADDING == 1 && size == 0 {
+        std::mem::size_of::<c_void>()
+    } else {
+        size
+    };
+
+    let page = _mi_heap_get_free_small_page(&mut heap, size + MI_PADDING_SIZE);
+    _mi_page_malloc(&heap, page, size, zero)
+}
+
+fn _mi_page_malloc<'a>(
+    heap: &Box<MiHeap>,
+    mut page: Box<MiPage>,
+    size: usize,
+    zero: bool,
+) -> *mut c_void {
+    // TODO check size for huge page
+    debug_assert!(page.xblock_size == 0);
+
+    let mut block = page.free.pop_front();
+
+    if block.is_none() && page.free.is_empty() {
+        // slow path
+        todo!("malloc generic, to be implemented");
+    }
+
+    // TODO check is in that block located in page
+    debug_assert!(!page.free.is_empty());
+
+    page.used += 1;
+
+    if zero {
+        // zero the block
+        // TODO
+        todo!("zero the block, to be implemented");
+    }
+
+    let ptr: *mut MiBlock = block.as_mut().unwrap();
+    unsafe { std::mem::transmute(ptr) }
+}
