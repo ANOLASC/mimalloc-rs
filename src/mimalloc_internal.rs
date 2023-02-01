@@ -41,7 +41,7 @@ pub fn _mi_heap_get_free_small_page<'a>(heap: &mut Box<MiHeap>, size: usize) -> 
 
     debug_assert!(idx <= MI_PAGES_DIRECT);
 
-    let ptr: *mut MiPage = &mut heap.pages_free_direct.as_mut().unwrap()[idx];
+    let ptr: *mut MiPage = heap.pages_free_direct[idx];
 
     unsafe { Box::from_raw(ptr) }
 }

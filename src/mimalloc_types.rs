@@ -3,7 +3,7 @@ use std::{
     ffi::c_void,
     ops::{Deref, DerefMut},
     ptr,
-    sync::Arc,
+    sync::{atomic::AtomicPtr, Arc},
 };
 
 pub const MI_SMALL_WSIZE_MAX: usize = 128;
@@ -32,13 +32,16 @@ struct MiPadding {
 pub const MI_PADDING_SIZE: usize = std::mem::size_of::<MiPadding>();
 pub const MI_PADDING_WSIZE: usize = (MI_PADDING_SIZE + MI_INTPTR_SIZE - 1) / MI_INTPTR_SIZE;
 pub const MI_PAGES_DIRECT: usize = MI_SMALL_WSIZE_MAX + MI_PADDING_WSIZE + 1;
+pub const MI_BIN_HUGE: usize = 73;
+pub const MI_BIN_FULL: usize = MI_BIN_HUGE + 1;
 
 #[repr(C)]
 pub struct MiHeap {
-    // mi_tld_t*             tld;
-    pub pages_free_direct: Option<Box<[MiPage; MI_PAGES_DIRECT]>>, // optimize: array where every entry points a page with possibly free blocks in the corresponding queue for that size.
-    // mi_page_queue_t       pages[MI_BIN_FULL + 1];              // queue of pages for each size class (or "bin")
-    // _Atomic(mi_block_t*)  thread_delayed_free;
+    // pub tld: *mut mi_tld_t,
+    pub pages_free_direct: [*mut MiPage; MI_PAGES_DIRECT], // optimize: array where every entry points a page with possibly free blocks in the corresponding queue for that size.
+    pub pages: [MiPageQueue; MI_BIN_FULL + 1], // queue of pages for each size class (or "bin")
+    // the same in-memory representation as raw pointer
+    pub thread_delayed_free: AtomicPtr<MiBlock>,
     pub thread_id: usize, // thread this heap belongs to
     // mi_arena_id_t         arena_id;                            // arena id if the heap belongs to a specific arena (or 0)
     // uintptr_t             cookie;                              // random cookie to verify pointers (see `_mi_ptr_cookie`)
@@ -47,22 +50,36 @@ pub struct MiHeap {
     pub page_count: usize,       // total number of pages in the `pages` queues.
     pub page_retired_min: usize, // smallest retired index (retired pages are fully free, but still in the page queues)
     pub page_retired_max: usize, // largest retired index into the `pages` array.
-    // pub next: *mut MiHeap,       // list of heaps per thread
-    pub no_reclaim: bool, // `true` if this heap should not reclaim abandoned pages
+    pub next: *mut MiHeap,       // list of heaps per thread
+    pub no_reclaim: bool,        // `true` if this heap should not reclaim abandoned pages
 }
 
 impl MiHeap {
     pub fn new() -> Self {
         Self {
-            pages_free_direct: None,
+            pages_free_direct: [ptr::null_mut(); MI_PAGES_DIRECT],
             page_count: 0,
             page_retired_min: 0,
             page_retired_max: 0,
-            // next: ptr::null_mut(),
             no_reclaim: false,
             thread_id: 0,
+            pages: [MiPageQueue {
+                first: ptr::null_mut(),
+                last: ptr::null_mut(),
+                block_size: 0,
+            }; MI_BIN_FULL + 1],
+            next: ptr::null_mut(),
+            thread_delayed_free: AtomicPtr::new(ptr::null_mut()),
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct MiPageQueue {
+    pub first: *mut MiPage,
+    pub last: *mut MiPage,
+    pub block_size: usize,
 }
 
 #[repr(C)]
@@ -105,47 +122,42 @@ impl PageFlag {
     }
 }
 
+pub type MiThreadFree = usize;
 #[repr(C)]
 pub struct MiPage {
     // "owned" by the segment
     pub slice_count: u32,  // slices in this page (0 if not a page)
     pub slice_offset: u32, // distance from the actual page data slice (0 if a page)
-    // is_reset: bool,      // `true` if the page memory was reset
-    // is_committed: bool,  // `true` if the page virtual memory is committed
-    // is_zero_init: bool,  // `true` if the page was zero initialized
     pub bitfield_1: BitfieldUnit<[u8; 1], u8>,
 
     // layout like this to optimize access in `mi_malloc` and `mi_free`
     pub capacity: u16, // number of blocks committed, must be the first field, see `segment.c:page_clear`
     pub reserved: u16, // number of blocks reserved in memory
     pub flags: MiPageFlags, // `in_full` and `has_aligned` flags (8 bits)
-    // uint8_t               is_zero : 1;       // `true` if the blocks in the free list are zero initialized
-    // uint8_t               retire_expire : 7; // expiration count for retired blocks
     pub bitfield_2: BitfieldUnit<[u8; 1], u8>,
 
     pub free: LinkedList<MiBlock>, // list of available free blocks (`malloc` allocates from this list)
     pub used: u32, // number of blocks in use (including blocks in `local_free` and `thread_free`)
     pub xblock_size: u32, // size available in each block (always `>0`)
-                   // mi_block_t*           local_free;        // list of deferred free blocks by this thread (migrates to `free`)
+    pub local_free: *mut MiBlock, // list of deferred free blocks by this thread (migrates to `free`)
 
-                   // #ifdef MI_ENCODE_FREELIST
-                   // uintptr_t             keys[2];           // two random keys to encode the free lists (see `_mi_block_next`)
-                   // #endif
+    // #ifdef MI_ENCODE_FREELIST
+    // uintptr_t             keys[2];           // two random keys to encode the free lists (see `_mi_block_next`)
+    // #endif
+    pub xthread_free: AtomicPtr<MiThreadFree>, // list of deferred free blocks freed by other threads
+    pub xheap: AtomicPtr<usize>,
+    pub next: *mut MiPage, // next page owned by this thread with the same `block_size`
+    pub prev: *mut MiPage, // previous page owned by this thread with the same `block_size`
 
-                   // _Atomic(mi_thread_free_t) xthread_free;  // list of deferred free blocks freed by other threads
-                   // _Atomic(uintptr_t)        xheap;
-
-                   // struct mi_page_s*     next;              // next page owned by this thread with the same `block_size`
-                   // struct mi_page_s*     prev;              // previous page owned by this thread with the same `block_size`
-
-                   // // 64-bit 9 words, 32-bit 12 words, (+2 for secure)
-                   // #if MI_INTPTR_SIZE==8
-                   // uintptr_t padding[1];
-                   // #endif
+                           // // 64-bit 9 words, 32-bit 12 words, (+2 for secure)
+                           // #if MI_INTPTR_SIZE==8
+                           // uintptr_t padding[1];
+                           // #endif
 }
 
 impl MiPage {
     #[inline]
+    // `true` if the page memory was reset
     pub fn is_reset(&self) -> u8 {
         self.bitfield_1.get(0usize, 1u8) as u8
     }
@@ -154,6 +166,7 @@ impl MiPage {
         self.bitfield_1.set(0usize, 1u8, val as u64)
     }
 
+    // `true` if the page virtual memory is committed
     #[inline]
     pub fn is_committed(&self) -> u8 {
         self.bitfield_1.get(0, 1) as u8
@@ -164,6 +177,7 @@ impl MiPage {
         self.bitfield_1.set(1, 1, val as u64);
     }
 
+    // `true` if the page was zero initialized
     #[inline]
     pub fn is_zero_init(&self) -> u8 {
         self.bitfield_1.get(2usize, 1u8) as u8
@@ -185,6 +199,8 @@ impl MiPage {
         bitfield_unitbitfield_unit.set(2usize, 1u8, is_zero_init as u64);
         bitfield_unitbitfield_unit
     }
+
+    // `true` if the blocks in the free list are zero initialized
     #[inline]
     pub fn is_zero(&self) -> u8 {
         self.bitfield_2.get(0usize, 1u8) as u8
@@ -193,6 +209,8 @@ impl MiPage {
     pub fn set_is_zero(&mut self, val: u8) {
         self.bitfield_2.set(0usize, 1u8, val as u64)
     }
+
+    // expiration count for retired blocks
     #[inline]
     pub fn retire_expire(&self) -> u8 {
         self.bitfield_2.get(1usize, 7u8) as u8
