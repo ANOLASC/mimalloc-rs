@@ -1,0 +1,10 @@
+branch: true
+binary-path: ./target/debug/
+ignore-not-existing: true
+llvm: true
+output-type: lcov
+output-path: lcov.info
+ignore:
+  - "/*"
+path-mapping:
+  - "."
