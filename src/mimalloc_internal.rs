@@ -1,30 +1,12 @@
-use std::{
-    ffi::c_void,
-    ops::Deref,
-    ptr,
-    sync::{Arc, Mutex},
-};
+use std::ffi::c_void;
 
 use crate::mimalloc_types::{MiHeap, MiPage, MI_PADDING_SIZE, MI_PAGES_DIRECT, MI_SMALL_SIZE_MAX};
-use std::mem::MaybeUninit;
 
 #[inline]
 pub fn get_default_heap() -> Box<MiHeap> {
     // TODO
-    // static mut DEFAULT_HEAP: MaybeUninit<*mut MiHeap> = MaybeUninit::uninit();
-
     Box::new(MiHeap::new())
-
-    // static mut HEAP: MiHeap = MiHeap::new();
-
-    // &mut HEAP
-
-    // let a = DEFAULT_HEAP.lock().as_mut().unwrap();
-    // a
 }
-
-// use once_cell::sync::Lazy;
-// static DEFAULT_HEAP: Lazy<Mutex<MiHeap>> = Lazy::new(|| Mutex::new(MiHeap::new()));
 
 type MiThreadid = usize;
 

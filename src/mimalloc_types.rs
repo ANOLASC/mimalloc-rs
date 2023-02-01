@@ -1,10 +1,4 @@
-use std::{
-    collections::LinkedList,
-    ffi::c_void,
-    ops::{Deref, DerefMut},
-    ptr,
-    sync::{atomic::AtomicPtr, Arc},
-};
+use std::{collections::LinkedList, ffi::c_void, ptr, sync::atomic::AtomicPtr};
 
 pub const MI_SMALL_WSIZE_MAX: usize = 128;
 pub const MI_SMALL_SIZE_MAX: usize = MI_SMALL_WSIZE_MAX * std::mem::size_of::<c_void>();
@@ -23,17 +17,44 @@ pub const MI_PADDING: usize = 1;
 #[cfg(not(debug_assertions))]
 pub const MI_PADDING: usize = 0;
 
+pub const MI_PADDING_SIZE: usize = std::mem::size_of::<MiPadding>();
+pub const MI_PADDING_WSIZE: usize = (MI_PADDING_SIZE + MI_INTPTR_SIZE - 1) / MI_INTPTR_SIZE;
+pub const MI_PAGES_DIRECT: usize = MI_SMALL_WSIZE_MAX + MI_PADDING_WSIZE + 1;
+pub const MI_BIN_HUGE: usize = 73;
+pub const MI_BIN_FULL: usize = MI_BIN_HUGE + 1;
+
+type MiMsecs = i64;
+pub type SizeT = ::std::os::raw::c_ulonglong;
+pub type MiThreadId = SizeT;
+pub type MiSlice = MiPage;
+
+const MI_SEGMENT_SLICE_SHIFT: usize = 13 + MI_INTPTR_SHIFT; // 64KiB  (32KiB on 32-bit)
+const MI_SEGMENT_SLICE_SIZE: usize = 1 << MI_SEGMENT_SLICE_SHIFT;
+
+#[cfg(target_pointer_width = "32")]
+const MI_SEGMENT_SHIFT: usize = 7 + MI_SEGMENT_SLICE_SHIFT;
+#[cfg(not(target_pointer_width = "32"))]
+const MI_SEGMENT_SHIFT: usize = 9 + MI_SEGMENT_SLICE_SHIFT;
+
+const MI_SEGMENT_SIZE: usize = 1 << MI_SEGMENT_SHIFT;
+const MI_SLICES_PER_SEGMENT: usize = MI_SEGMENT_SIZE / MI_SEGMENT_SLICE_SIZE; // 1024
+
+pub type MiArenaIdT = ::std::os::raw::c_int;
+
 #[repr(C)]
 struct MiPadding {
     canary: u32, // encoded block value to check validity of the padding (in case of overflow)
     delta: u32, // padding bytes before the block. (mi_usable_size(p) - delta == exact allocated bytes)
 }
 
-pub const MI_PADDING_SIZE: usize = std::mem::size_of::<MiPadding>();
-pub const MI_PADDING_WSIZE: usize = (MI_PADDING_SIZE + MI_INTPTR_SIZE - 1) / MI_INTPTR_SIZE;
-pub const MI_PAGES_DIRECT: usize = MI_SMALL_WSIZE_MAX + MI_PADDING_WSIZE + 1;
-pub const MI_BIN_HUGE: usize = 73;
-pub const MI_BIN_FULL: usize = MI_BIN_HUGE + 1;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct MiRandomCtx {
+    pub input: [u32; 16usize],
+    pub output: [u32; 16usize],
+    pub output_available: ::std::os::raw::c_int,
+    pub weak: bool,
+}
 
 #[repr(C)]
 pub struct MiHeap {
@@ -42,11 +63,11 @@ pub struct MiHeap {
     pub pages: [MiPageQueue; MI_BIN_FULL + 1], // queue of pages for each size class (or "bin")
     // the same in-memory representation as raw pointer
     pub thread_delayed_free: AtomicPtr<MiBlock>,
-    pub thread_id: usize, // thread this heap belongs to
-    // mi_arena_id_t         arena_id;                            // arena id if the heap belongs to a specific arena (or 0)
-    // uintptr_t             cookie;                              // random cookie to verify pointers (see `_mi_ptr_cookie`)
-    // uintptr_t             keys[2];                             // two random keys used to encode the `thread_delayed_free` list
-    // mi_random_ctx_t       random;                              // random number context used for secure allocation
+    pub thread_id: usize,        // thread this heap belongs to
+    pub arena_id: MiArenaIdT,    // arena id if the heap belongs to a specific arena (or 0)
+    pub cookie: usize,           // random cookie to verify pointers (see `_mi_ptr_cookie`)
+    pub keys: [usize; 2],        // two random keys used to encode the `thread_delayed_free` list
+    pub random: MiRandomCtx,     // random number context used for secure allocation
     pub page_count: usize,       // total number of pages in the `pages` queues.
     pub page_retired_min: usize, // smallest retired index (retired pages are fully free, but still in the page queues)
     pub page_retired_max: usize, // largest retired index into the `pages` array.
@@ -70,6 +91,15 @@ impl MiHeap {
             }; MI_BIN_FULL + 1],
             next: ptr::null_mut(),
             thread_delayed_free: AtomicPtr::new(ptr::null_mut()),
+            arena_id: 0,
+            cookie: 0,
+            keys: [0, 0],
+            random: MiRandomCtx {
+                input: [0; 16],
+                output: [0; 16],
+                output_available: 0,
+                weak: false,
+            },
         }
     }
 }
@@ -350,36 +380,100 @@ where
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct MiCommitMask {
+    pub mask: [SizeT; 8usize],
+}
+
+#[repr(C)]
+enum MiPageKind {
+    MiPageSmall,  // small blocks go into 64KiB pages inside a segment
+    MiPageMedium, // medium blocks go into medium pages inside a segment
+    MiPageLarge,  // larger blocks go into a page of just one block
+    MiPageHuge,   // huge blocks (> 16 MiB) are put into a single page in a single segment.
+}
+
+#[repr(C)]
+pub enum MiSegmentKind {
+    MiSegmentNormal, // MI_SEGMENT_SIZE size with pages inside.
+    MiSegmentHuge,   // > MI_LARGE_SIZE_MAX segment with just one huge page inside.
+}
+
+#[repr(C)]
 pub struct MiSegment {
-    // size_t            memid;              // memory id for arena allocation
-    // bool              mem_is_pinned;      // `true` if we cannot decommit/reset/protect in this memory (i.e. when allocated using large OS pages)
-    // bool              mem_is_large;       // in large/huge os pages?
-    // bool              mem_is_committed;   // `true` if the whole segment is eagerly committed
-    // size_t            mem_alignment;      // page alignment for huge pages (only used for alignment > MI_ALIGNMENT_MAX)
-    // size_t            mem_align_offset;   // offset for huge page alignment (only used for alignment > MI_ALIGNMENT_MAX)
+    pub memid: usize,            // memory id for arena allocation
+    pub mem_is_pinned: bool, // `true` if we cannot decommit/reset/protect in this memory (i.e. when allocated using large OS pages)
+    pub mem_is_large: bool,  // in large/huge os pages?
+    pub mem_is_committed: bool, // `true` if the whole segment is eagerly committed
+    pub mem_alignment: usize, // page alignment for huge pages (only used for alignment > MI_ALIGNMENT_MAX)
+    pub mem_align_offset: usize, // offset for huge page alignment (only used for alignment > MI_ALIGNMENT_MAX)
 
-    // bool              allow_decommit;
-    // mi_msecs_t        decommit_expire;
-    // mi_commit_mask_t  decommit_mask;
-    // mi_commit_mask_t  commit_mask;
-
-    // _Atomic(struct mi_segment_s*) abandoned_next;
-
+    pub allow_decommit: bool,
+    pub decommit_expire: MiMsecs,
+    pub decommit_mask: MiCommitMask,
+    pub commit_mask: MiCommitMask,
+    pub abandoned_next: AtomicPtr<MiSegment>,
     // // from here is zero initialized
-    // struct mi_segment_s* next;            // the list of freed segments in the cache (must be first field, see `segment.c:mi_segment_init`)
+    pub next: *mut MiSegment, // the list of freed segments in the cache (must be first field, see `segment.c:mi_segment_init`)
+    pub abandoned: SizeT, // abandoned pages (i.e. the original owning thread stopped) (`abandoned <= used`)
+    pub abandoned_visits: SizeT, // count how often this segment is visited in the abandoned list (to force reclaim it it is too long)
+    pub used: SizeT,             // count of pages in use
+    pub cookie: usize, // verify addresses in debug mode: `mi_ptr_cookie(segment) == segment->cookie`
 
-    // size_t            abandoned;          // abandoned pages (i.e. the original owning thread stopped) (`abandoned <= used`)
-    // size_t            abandoned_visits;   // count how often this segment is visited in the abandoned list (to force reclaim it it is too long)
-    // size_t            used;               // count of pages in use
-    // uintptr_t         cookie;             // verify addresses in debug mode: `mi_ptr_cookie(segment) == segment->cookie`
-
-    // size_t            segment_slices;      // for huge segments this may be different from `MI_SLICES_PER_SEGMENT`
-    // size_t            segment_info_slices; // initial slices we are using segment info and possible guard pages.
+    pub segment_slices: SizeT, // for huge segments this may be different from `MI_SLICES_PER_SEGMENT`
+    pub segment_info_slices: SizeT, // initial slices we are using segment info and possible guard pages.
 
     // // layout like this to optimize access in `mi_free`
-    // mi_segment_kind_t kind;
-    // size_t            slice_entries;       // entries in the `slices` array, at most `MI_SLICES_PER_SEGMENT`
-    // _Atomic(mi_threadid_t) thread_id;      // unique id of the thread owning this segment
+    pub kind: MiSegmentKind,
+    pub slice_entries: SizeT, // entries in the `slices` array, at most `MI_SLICES_PER_SEGMENT`
+    pub thread_id: AtomicPtr<MiThreadId>, // unique id of the thread owning this segment
 
-    // mi_slice_t        slices[MI_SLICES_PER_SEGMENT+1];  // one more for huge blocks with large alignment
+    pub slices: [MiSlice; MI_SLICES_PER_SEGMENT + 1], // one more for huge blocks with large alignment
+}
+
+// ------------------------------------------------------
+// Thread Local data
+// ------------------------------------------------------
+
+// A "span" is is an available range of slices. The span queues keep
+// track of slice spans of at most the given `slice_count` (but more than the previous size class).
+#[repr(C)]
+pub struct MiSpanQueue {
+    pub first: *mut MiSlice,
+    pub last: *mut MiSlice,
+    pub slice_count: SizeT,
+}
+
+const MI_SEGMENT_BIN_MAX: usize = 35; // 35 == mi_segment_bin(MI_SLICES_PER_SEGMENT)
+
+// OS thread local data
+#[repr(C)]
+pub struct MiOsTld {
+    pub region_idx: SizeT, // start point for next allocation
+                           //mi_stats_t*           stats,       // points to tld stats
+}
+
+// Segments thread local data
+#[repr(C)]
+pub struct MiSegmentsTld {
+    pub spans: [MiSpanQueue; MI_SEGMENT_BIN_MAX + 1], // free slice spans inside segments
+    pub count: SizeT,                                 // current number of segments
+    pub peak_count: SizeT,                            // peak number of segments
+    pub current_size: SizeT,                          // current size of all segments
+    pub peak_size: SizeT,                             // peak size of all segments
+    // pub stats                      : mi_stats_t*      ,                    // points to tld stats
+    pub os: *mut MiOsTld, // points to os stats
+}
+
+// Thread local data
+#[repr(C)]
+pub struct MiTld {
+    pub heartbeat: std::os::raw::c_ulonglong, // monotonic heartbeat count
+    pub recurse: bool, // true if deferred was called, used to prevent infinite recursion.
+    pub heap_backing: *mut MiHeap, // backing heap of this thread (cannot be deleted)
+    pub heaps: *mut MiHeap, // list of heaps in this thread (so we can abandon all when the thread terminates)
+    pub segments: MiSegmentsTld, // segment tld
+    pub os: MiOsTld,        // os tld
+                            //pub stats          : mi_stats_t,         // statistics
 }
