@@ -58,7 +58,7 @@ pub struct MiRandomCtx {
 
 #[repr(C)]
 pub struct MiHeap {
-    // pub tld: *mut mi_tld_t,
+    pub tld: *mut MiTld,
     pub pages_free_direct: [*mut MiPage; MI_PAGES_DIRECT], // optimize: array where every entry points a page with possibly free blocks in the corresponding queue for that size.
     pub pages: [MiPageQueue; MI_BIN_FULL + 1], // queue of pages for each size class (or "bin")
     // the same in-memory representation as raw pointer
@@ -100,6 +100,7 @@ impl MiHeap {
                 output_available: 0,
                 weak: false,
             },
+            tld: ptr::null_mut(),
         }
     }
 }

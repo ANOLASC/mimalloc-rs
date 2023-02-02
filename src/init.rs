@@ -1,3 +1,5 @@
+use ctor::{ctor, dtor};
+
 use crate::mimalloc_types::MiHeap;
 use std::mem::MaybeUninit;
 use std::sync::{Mutex, Once};
@@ -13,35 +15,21 @@ pub fn get_mi_heap_main() -> &'static mut MiHeap {
     }
 }
 
-fn mi_heap_init() {
+fn mi_heap_init() {}
 
-}
+fn mi_heap_done() {}
 
-fn mi_heap_done() {
+#[ctor]
+fn mi_proces_init() {}
 
-}
-
-fn mi_proces_init() {
-
-}
-
-fn mi_process_done() {
-
-}
+#[dtor]
+fn mi_process_done() {}
 
 // Called once by the process loader
-fn mi_process_load() {
-    
-}
+fn mi_process_load() {}
 
-fn mi_thread_init() {
+fn mi_thread_init() {}
 
-}
+fn mi_thread_done() {}
 
-fn mi_thread_done() {
-
-}
-
-fn mi_is_main_thread() {
-
-}
+fn mi_is_main_thread() {}
