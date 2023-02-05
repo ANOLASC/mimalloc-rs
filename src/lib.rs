@@ -5,5 +5,6 @@ mod mimalloc_internal;
 mod mimalloc_types;
 mod os;
 mod page;
+mod random;
 mod segment;
 mod tests;

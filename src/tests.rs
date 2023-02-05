@@ -1,36 +1,34 @@
-#[cfg(test)]
-mod tests {
-    // use paste::paste;
+// #[cfg(test)]
+// use paste::paste;
 
-    // use crate::mimalloc_types::MiHeap;
+// use crate::mimalloc_types::MiHeap;
 
-    macro_rules! test_layout {
-        ($type: ty, $size: expr, $align: expr) => {
-            paste! {
-                #[test]
-                fn [<test_layout_ $type:snake>]() {
-                    assert_eq!(
-                        ::std::mem::size_of::<$type>(),
-                        [<$size usize>],
-                        concat!("Size of: ", stringify!($type))
-                    );
-                    assert_eq!(
-                        ::std::mem::align_of::<$type>(),
-                        [<$align usize>],
-                        concat!("Alignment of ", stringify!($type))
-                    );
-                }
+macro_rules! test_layout {
+    ($type: ty, $size: expr, $align: expr) => {
+        paste! {
+            #[test]
+            fn [<test_layout_ $type:snake>]() {
+                assert_eq!(
+                    ::std::mem::size_of::<$type>(),
+                    [<$size usize>],
+                    concat!("Size of: ", stringify!($type))
+                );
+                assert_eq!(
+                    ::std::mem::align_of::<$type>(),
+                    [<$align usize>],
+                    concat!("Alignment of ", stringify!($type)) 
+                );
             }
-        };
-    }
+        }
+    };
+}
 
-    // wrong test, should not pass
-    // test_layout!(MiHeap, 12, 12);
+// wrong test, should not pass
+// test_layout!(MiHeap, 12, 12);
 
-    #[test]
-    fn success() {
-        assert_eq!(1, 1);
-    }
+#[test]
+fn success() {
+    assert_eq!(1, 1);
 }
 
 // fn bindgen_test_layout_mi_random_cxt_s() {

@@ -4,4 +4,4 @@ rustflags = "-Cinstrument-coverage"
 incremental = false
 
 [env]
-LLVM_PROFILE_FILE = "test-%p-%m.profraw"
+LLVM_PROFILE_FILE = "codecov-%p-%m.profraw"
