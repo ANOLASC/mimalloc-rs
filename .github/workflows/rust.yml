@@ -27,6 +27,9 @@ jobs:
     - name: Build
       run: cargo build --verbose
     - name: Run tests
+      env:
+        RUSTFLAGS: -Cinstrument-coverage
+        LLVM_PROFILE_FILE: "codecov-%p-%m.profraw"
       run: cargo test --verbose
     - name: install grcov
       run: cargo install grcov

@@ -1,7 +1,0 @@
-[build]
-# rustflags = "-Cdebuginfo=2 -Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
-rustflags = "-Cinstrument-coverage"
-incremental = false
-
-[env]
-LLVM_PROFILE_FILE = "codecov-%p-%m.profraw"
