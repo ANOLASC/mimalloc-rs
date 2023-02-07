@@ -25,13 +25,63 @@ fn mi_heap_init() {}
 
 fn mi_heap_done() {}
 
+static MI_PROCESS_IS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 #[ctor]
 fn mi_proces_init() {
-    mi_process_load()
+    if MI_PROCESS_IS_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+
+    MI_PROCESS_IS_INITIALIZED.store(true, Ordering::Release);
+
+    // TODO log here
+    mi_detect_cpu_feature();
+    mi_os_init();
+
+    mi_heap_main_init();
+    mi_thread_init();
+    if cfg!(Win32) {
+        // TODO check lately here
+        // FlsSetValue(mi_fls_key, NULL);
+    }
+
+    // TODO support option reserve huge os page and reserve os memory
+}
+
+fn mi_os_init() {
+    // TODO
+}
+
+fn mi_detect_cpu_feature() {
+    // detect cpu feature
+    // TODO to be implemented
 }
 
 #[dtor]
-fn mi_process_done() {}
+// called when process is done
+fn mi_process_done() {
+    if !MI_PROCESS_IS_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+
+    static PROCESS_DONE: AtomicBool = AtomicBool::new(false);
+    if PROCESS_DONE.load(Ordering::Acquire) {
+        return;
+    }
+
+    PROCESS_DONE.store(true, Ordering::Release);
+
+    // TODO FlsFree here
+
+    // TODO support feture destroy on exit
+
+    mi_allocator_done();
+}
+
+fn mi_allocator_done() {
+    // nothing to do
+}
 
 // Called once by the process loader
 fn mi_process_load() {
@@ -40,7 +90,11 @@ fn mi_process_load() {
     mi_option_init();
 }
 
-fn mi_thread_init() {}
+// called from `mi_malloc_generic`
+fn mi_thread_init() {
+    // ensure process has started already
+    mi_proces_init();
+}
 
 fn mi_thread_done() {}
 
