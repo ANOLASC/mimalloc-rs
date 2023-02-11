@@ -1,5 +1,6 @@
 mod alloc;
 mod arena;
+mod heap;
 mod init;
 mod mimalloc_internal;
 mod mimalloc_types;
