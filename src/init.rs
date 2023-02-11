@@ -1,13 +1,14 @@
 use ctor::{ctor, dtor};
 use windows::Win32::System::Threading::{FlsAlloc, FlsSetValue};
 
-use crate::mimalloc_internal::_mi_thread_id;
-use crate::mimalloc_types::MiHeap;
+use crate::heap::mi_heap_delete;
+use crate::mimalloc_internal::{_mi_thread_id, get_default_heap, mi_heap_is_initialized};
+use crate::mimalloc_types::{MiHeap, MiTLD, MiThreadData, MiThreadId};
 use crate::random::_mi_heap_random_next;
-use std::borrow::{Borrow, BorrowMut};
 use std::mem::MaybeUninit;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Once;
 
 pub fn get_mi_heap_main() -> &'static mut MiHeap {
@@ -21,9 +22,52 @@ pub fn get_mi_heap_main() -> &'static mut MiHeap {
     }
 }
 
-fn mi_heap_init() {}
+// Initialize the thread local default heap, called from `mi_thread_init`
+fn mi_heap_init() -> bool {
+    if mi_heap_is_initialized(get_default_heap().as_ref()) {
+        return true;
+    }
 
-fn mi_heap_done() {}
+    if mi_is_main_thread() {
+        mi_heap_main_init();
+        _mi_heap_set_default_direct(get_mi_heap_main());
+    } else {
+        let td: *mut MiThreadData = mi_thread_data_alloc();
+        // TODO should use Option instead?
+        if td.is_null() {
+            return false;
+        }
+
+        // OS allocated so already zero initialized
+        let tld: *mut MiTLD = unsafe { &mut (*td).tld };
+        let heap: *mut MiHeap = unsafe { &mut (*td).heap };
+        // TODO initialize tld and heap by using memcpy
+        // Do I really need to use memcpy?
+
+        unsafe {
+            (*heap).thread_id = _mi_thread_id();
+
+            // TODO currently, do not random the heap
+            // _mi_random_init(&heap->random);
+            // (*heap).cookie = _mi_heap_random_next(heap) | 1;
+            // heap->keys[0] = _mi_heap_random_next(heap);
+            // heap->keys[1] = _mi_heap_random_next(heap);
+            (*heap).tld = tld;
+            (*tld).heap_backing = heap;
+            (*tld).heaps = heap;
+            // (*tld).segments.stats = &(*tld).stats;
+            (*tld).segments.os = &mut (*tld).os;
+            // (*tld).os.stats = &(*tld).stats;
+            // _mi_heap_set_default_direct(heap);
+        }
+    }
+
+    false
+}
+
+fn mi_thread_data_alloc() -> *mut MiThreadData {
+    ptr::null_mut()
+}
 
 static MI_PROCESS_IS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -94,19 +138,88 @@ fn mi_process_load() {
 fn mi_thread_init() {
     // ensure process has started already
     mi_proces_init();
+
+    if mi_heap_init() {}
 }
 
-fn mi_thread_done() {}
+static THREAD_COUNT: AtomicUsize = AtomicUsize::new(1);
+
+// called by DllMain, currently, do not implement
+fn mi_thread_done() {
+    _mi_thread_done(get_default_heap().as_mut());
+}
 
 fn _mi_thread_done(heap: *mut MiHeap) {
+    THREAD_COUNT.fetch_sub(1, Ordering::Relaxed);
+
     // mi_atomic_decrement_relaxed(&thread_count);
     // _mi_stat_decrease(&_mi_stats_main.threads, 1);
 
-    // // check thread-id as on Windows shutdown with FLS the main (exit) thread may call this on thread-local heaps...
-    // if (heap->thread_id != _mi_thread_id()) return;
+    // check thread-id as on Windows shutdown with FLS the main (exit) thread may call this on thread-local heaps...
+    unsafe {
+        if (*heap).thread_id != _mi_thread_id() {
+            return;
+        }
+    }
 
-    // // abandon the thread local heap
-    // if (_mi_heap_done(heap)) return;  // returns true if already ran
+    // abandon the thread local heap
+    _mi_heap_done(heap);
+}
+
+// Free the thread local default heap (called from `mi_thread_done`)
+fn _mi_heap_done(heap: *mut MiHeap) -> bool {
+    if !mi_heap_is_initialized(heap) {
+        return true;
+    }
+
+    // reset default heap
+    if mi_is_main_thread() {
+        _mi_heap_set_default_direct(get_mi_heap_main());
+    } else {
+        // TDOO
+        // _mi_heap_set_default_direct()
+    }
+
+    // delete all non-backing heaps in this thread
+    let mut curr = unsafe { (*(*heap).tld).heaps };
+
+    while !curr.is_null() {
+        let next = unsafe { (*curr).next };
+        if curr != heap {
+            mi_heap_delete(curr);
+        }
+        curr = next;
+    }
+
+    // mi_assert_internal(heap->tld->heaps == heap && heap->next == NULL);
+    // mi_assert_internal(mi_heap_is_backing(heap));
+
+    //     // collect if not the main thread
+    //   if (heap != &_mi_heap_main) {
+    //     _mi_heap_collect_abandon(heap);
+    //   }
+
+    //   // merge stats
+    //   _mi_stats_done(&heap->tld->stats);
+
+    //   // free if not the main thread
+    //   if (heap != &_mi_heap_main) {
+    //     // the following assertion does not always hold for huge segments as those are always treated
+    //     // as abondened: one may allocate it in one thread, but deallocate in another in which case
+    //     // the count can be too large or negative. todo: perhaps not count huge segments? see issue #363
+    //     // mi_assert_internal(heap->tld->segments.count == 0 || heap->thread_id != _mi_thread_id());
+    //     mi_thread_data_free((mi_thread_data_t*)heap);
+    //   }
+    //   else {
+    //     mi_thread_data_collect(); // free cached thread metadata
+    //     #if 0
+    //     // never free the main thread even in debug mode; if a dll is linked statically with mimalloc,
+    //     // there may still be delete/free calls after the mi_fls_done is called. Issue #207
+    //     _mi_heap_destroy_pages(heap);
+    //     mi_assert_internal(heap->tld->heap_backing == &_mi_heap_main);
+    //     #endif
+    //   }
+    false
 }
 
 fn mi_is_main_thread() -> bool {

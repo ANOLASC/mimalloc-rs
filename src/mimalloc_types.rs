@@ -58,7 +58,7 @@ pub struct MiRandomCtx {
 
 #[repr(C)]
 pub struct MiHeap {
-    pub tld: *mut MiTld,
+    pub tld: *mut MiTLD,
     pub pages_free_direct: [*mut MiPage; MI_PAGES_DIRECT], // optimize: array where every entry points a page with possibly free blocks in the corresponding queue for that size.
     pub pages: [MiPageQueue; MI_BIN_FULL + 1], // queue of pages for each size class (or "bin")
     // the same in-memory representation as raw pointer
@@ -187,6 +187,26 @@ pub struct MiPage {
 }
 
 impl MiPage {
+    pub fn new() -> Self {
+        Self {
+            slice_count: 0,
+            slice_offset: 0,
+            bitfield_1: BitfieldUnit::new([0]),
+            capacity: 0,
+            reserved: 0,
+            flags: MiPageFlags { full_aligned: 0 },
+            bitfield_2: BitfieldUnit::new([0]),
+            free: LinkedList::new(),
+            used: 0,
+            xblock_size: 0,
+            local_free: ptr::null_mut(),
+            xthread_free: AtomicPtr::new(ptr::null_mut()),
+            xheap: AtomicPtr::new(ptr::null_mut()),
+            next: ptr::null_mut(),
+            prev: ptr::null_mut(),
+        }
+    }
+
     #[inline]
     // `true` if the page memory was reset
     pub fn is_reset(&self) -> u8 {
@@ -213,6 +233,7 @@ impl MiPage {
     pub fn is_zero_init(&self) -> u8 {
         self.bitfield_1.get(2usize, 1u8) as u8
     }
+
     #[inline]
     pub fn set_is_zero_init(&mut self, val: u8) {
         self.bitfield_1.set(2usize, 1u8, val as u64)
@@ -236,6 +257,7 @@ impl MiPage {
     pub fn is_zero(&self) -> u8 {
         self.bitfield_2.get(0usize, 1u8) as u8
     }
+
     #[inline]
     pub fn set_is_zero(&mut self, val: u8) {
         self.bitfield_2.set(0usize, 1u8, val as u64)
@@ -246,10 +268,12 @@ impl MiPage {
     pub fn retire_expire(&self) -> u8 {
         self.bitfield_2.get(1usize, 7u8) as u8
     }
+
     #[inline]
     pub fn set_retire_expire(&mut self, val: u8) {
         self.bitfield_2.set(1usize, 7u8, val as u64)
     }
+
     #[inline]
     pub fn new_bitfield_2(is_zero: u8, retire_expire: u8) -> BitfieldUnit<[u8; 1usize], u8> {
         let mut bitfield_unitbitfield_unit: BitfieldUnit<[u8; 1usize], u8> = Default::default();
@@ -276,7 +300,7 @@ pub struct BitfieldUnit<Storage, Align> {
 
 impl<Storage, Align> BitfieldUnit<Storage, Align> {
     #[inline]
-    pub fn new(storage: Storage) -> Self {
+    pub const fn new(storage: Storage) -> Self {
         Self { storage, align: [] }
     }
 }
@@ -457,7 +481,7 @@ pub struct MiOsTld {
 
 // Segments thread local data
 #[repr(C)]
-pub struct MiSegmentsTld {
+pub struct MiSegmentsTLD {
     pub spans: [MiSpanQueue; MI_SEGMENT_BIN_MAX + 1], // free slice spans inside segments
     pub count: SizeT,                                 // current number of segments
     pub peak_count: SizeT,                            // peak number of segments
@@ -469,12 +493,19 @@ pub struct MiSegmentsTld {
 
 // Thread local data
 #[repr(C)]
-pub struct MiTld {
+pub struct MiTLD {
     pub heartbeat: std::os::raw::c_ulonglong, // monotonic heartbeat count
     pub recurse: bool, // true if deferred was called, used to prevent infinite recursion.
     pub heap_backing: *mut MiHeap, // backing heap of this thread (cannot be deleted)
     pub heaps: *mut MiHeap, // list of heaps in this thread (so we can abandon all when the thread terminates)
-    pub segments: MiSegmentsTld, // segment tld
+    pub segments: MiSegmentsTLD, // segment tld
     pub os: MiOsTld,        // os tld
                             //pub stats          : mi_stats_t,         // statistics
+}
+
+#[repr(C)]
+// note: in x64 in release build `sizeof(mi_thread_data_t)` is under 4KiB (= OS page size).
+pub struct MiThreadData {
+    pub heap: MiHeap, // must come first due to cast in `_mi_heap_done`
+    pub tld: MiTLD,
 }
