@@ -276,3 +276,7 @@ fn _mi_heap_set_default_direct(heap: *mut MiHeap) {
         FlsSetValue(MI_FLS_KEY, Some(heap.cast()));
     }
 }
+
+fn _mi_current_thread_count() -> usize {
+    THREAD_COUNT.load(Ordering::Relaxed)
+}

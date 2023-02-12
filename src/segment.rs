@@ -1,9 +1,6 @@
-use std::ptr;
+use std::{ptr, sync::atomic::AtomicU32};
 
 use crate::mimalloc_types::{MiPage, MiSegment};
-
-// TODO modify get the real page size
-pub const OS_PAGE_SIZE: usize = 4096;
 
 fn mi_segment_alloc(
     required: usize,
