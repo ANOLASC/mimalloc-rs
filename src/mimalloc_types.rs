@@ -48,7 +48,7 @@ struct MiPadding {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct MiRandomCtx {
     pub input: [u32; 16usize],
     pub output: [u32; 16usize],
@@ -73,6 +73,27 @@ pub struct MiHeap {
     pub page_retired_max: usize, // largest retired index into the `pages` array.
     pub next: *mut MiHeap,       // list of heaps per thread
     pub no_reclaim: bool,        // `true` if this heap should not reclaim abandoned pages
+}
+
+impl Default for MiHeap {
+    fn default() -> Self {
+        Self {
+            tld: ptr::null_mut(),
+            pages_free_direct: [ptr::null_mut(); MI_PAGES_DIRECT],
+            pages: [Default::default(); MI_BIN_FULL + 1],
+            thread_delayed_free: Default::default(),
+            thread_id: Default::default(),
+            arena_id: Default::default(),
+            cookie: Default::default(),
+            keys: Default::default(),
+            random: Default::default(),
+            page_count: Default::default(),
+            page_retired_min: Default::default(),
+            page_retired_max: Default::default(),
+            next: ptr::null_mut(),
+            no_reclaim: Default::default(),
+        }
+    }
 }
 
 impl MiHeap {
@@ -113,6 +134,16 @@ pub struct MiPageQueue {
     pub block_size: usize,
 }
 
+impl Default for MiPageQueue {
+    fn default() -> Self {
+        Self {
+            first: ptr::null_mut(),
+            last: ptr::null_mut(),
+            block_size: Default::default(),
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union MiPageFlags {
@@ -121,8 +152,14 @@ pub union MiPageFlags {
     _bindgen_union_align: u8,
 }
 
+impl Default for MiPageFlags {
+    fn default() -> Self {
+        Self { full_aligned: 0 }
+    }
+}
+
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct PageFlag {
     pub bitfield_1: BitfieldUnit<[u8; 1], u8>,
 }
@@ -184,6 +221,28 @@ pub struct MiPage {
                            // #if MI_INTPTR_SIZE==8
                            // uintptr_t padding[1];
                            // #endif
+}
+
+impl Default for MiPage {
+    fn default() -> Self {
+        Self {
+            slice_count: Default::default(),
+            slice_offset: Default::default(),
+            bitfield_1: Default::default(),
+            capacity: Default::default(),
+            reserved: Default::default(),
+            flags: Default::default(),
+            bitfield_2: Default::default(),
+            free: Default::default(),
+            used: Default::default(),
+            xblock_size: Default::default(),
+            local_free: ptr::null_mut(),
+            xthread_free: Default::default(),
+            xheap: Default::default(),
+            next: ptr::null_mut(),
+            prev: ptr::null_mut(),
+        }
+    }
 }
 
 impl MiPage {
@@ -289,6 +348,14 @@ type MiEncoded = usize;
 #[derive(Debug, Copy, Clone)]
 pub struct MiBlock {
     next: MiEncoded,
+}
+
+impl Default for MiBlock {
+    fn default() -> Self {
+        Self {
+            next: Default::default(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -464,23 +531,44 @@ pub struct MiSegment {
 // A "span" is is an available range of slices. The span queues keep
 // track of slice spans of at most the given `slice_count` (but more than the previous size class).
 #[repr(C)]
+#[derive(Clone, Copy)] // May happen deep copy here, if use clone in MiSpanQueue
 pub struct MiSpanQueue {
     pub first: *mut MiSlice,
     pub last: *mut MiSlice,
     pub slice_count: SizeT,
 }
 
+impl Default for MiSpanQueue {
+    fn default() -> Self {
+        Self {
+            first: ptr::null_mut(),
+            last: ptr::null_mut(),
+            slice_count: Default::default(),
+        }
+    }
+}
+
 const MI_SEGMENT_BIN_MAX: usize = 35; // 35 == mi_segment_bin(MI_SLICES_PER_SEGMENT)
 
 // OS thread local data
 #[repr(C)]
-pub struct MiOsTld {
+#[derive(Clone)]
+pub struct MiOsTLD {
     pub region_idx: SizeT, // start point for next allocation
                            //mi_stats_t*           stats,       // points to tld stats
 }
 
+impl Default for MiOsTLD {
+    fn default() -> Self {
+        Self {
+            region_idx: Default::default(),
+        }
+    }
+}
+
 // Segments thread local data
 #[repr(C)]
+#[derive(Clone)]
 pub struct MiSegmentsTLD {
     pub spans: [MiSpanQueue; MI_SEGMENT_BIN_MAX + 1], // free slice spans inside segments
     pub count: SizeT,                                 // current number of segments
@@ -488,19 +576,46 @@ pub struct MiSegmentsTLD {
     pub current_size: SizeT,                          // current size of all segments
     pub peak_size: SizeT,                             // peak size of all segments
     // pub stats                      : mi_stats_t*      ,                    // points to tld stats
-    pub os: *mut MiOsTld, // points to os stats
+    pub os: *mut MiOsTLD, // points to os stats
+}
+
+impl Default for MiSegmentsTLD {
+    fn default() -> Self {
+        Self {
+            spans: [Default::default(); MI_SEGMENT_BIN_MAX + 1],
+            count: Default::default(),
+            peak_count: Default::default(),
+            current_size: Default::default(),
+            peak_size: Default::default(),
+            os: ptr::null_mut(),
+        }
+    }
 }
 
 // Thread local data
 #[repr(C)]
+#[derive(Clone)]
 pub struct MiTLD {
     pub heartbeat: std::os::raw::c_ulonglong, // monotonic heartbeat count
     pub recurse: bool, // true if deferred was called, used to prevent infinite recursion.
     pub heap_backing: *mut MiHeap, // backing heap of this thread (cannot be deleted)
     pub heaps: *mut MiHeap, // list of heaps in this thread (so we can abandon all when the thread terminates)
     pub segments: MiSegmentsTLD, // segment tld
-    pub os: MiOsTld,        // os tld
+    pub os: MiOsTLD,        // os tld
                             //pub stats          : mi_stats_t,         // statistics
+}
+
+impl Default for MiTLD {
+    fn default() -> Self {
+        Self {
+            heartbeat: Default::default(),
+            recurse: Default::default(),
+            heap_backing: ptr::null_mut(),
+            heaps: ptr::null_mut(),
+            segments: Default::default(),
+            os: Default::default(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -508,4 +623,19 @@ pub struct MiTLD {
 pub struct MiThreadData {
     pub heap: MiHeap, // must come first due to cast in `_mi_heap_done`
     pub tld: MiTLD,
+}
+
+impl Default for MiThreadData {
+    fn default() -> Self {
+        Self {
+            heap: Default::default(),
+            tld: Default::default(),
+        }
+    }
+}
+
+impl MiThreadData {
+    pub fn new() -> Self {
+        Default::default()
+    }
 }

@@ -8,7 +8,7 @@ use crate::random::_mi_heap_random_next;
 use std::mem::MaybeUninit;
 use std::os::raw::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Once;
 
 pub fn get_mi_heap_main() -> &'static mut MiHeap {
@@ -64,6 +64,14 @@ fn mi_heap_init() -> bool {
 
     false
 }
+
+// Thread meta-data is allocated directly from the OS. For
+// some programs that do not use thread pools and allocate and
+// destroy many OS threads, this may causes too much overhead
+// per thread so we maintain a small cache of recently freed metadata.
+
+const TD_CACHE_SIZE: usize = 8;
+static TD_CACHE: AtomicPtr<[Option<MiThreadData>; TD_CACHE_SIZE]> = AtomicPtr::new(ptr::null_mut());
 
 fn mi_thread_data_alloc() -> *mut MiThreadData {
     ptr::null_mut()
