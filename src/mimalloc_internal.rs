@@ -56,7 +56,7 @@ fn mi_heap_is_backing(heap: *mut MiHeap) -> bool {
 pub fn mi_heap_is_initialized(heap: *const MiHeap) -> bool {
     // debug_assert!(heap.is_null());
     // Currently, Heap are initialized by default
-    true
+    false
 }
 
 #[inline]

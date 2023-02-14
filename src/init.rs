@@ -24,7 +24,7 @@ pub fn get_mi_heap_main() -> &'static mut MiHeap {
 }
 
 // Initialize the thread local default heap, called from `mi_thread_init`
-fn _mi_heap_init() -> bool {
+pub fn _mi_heap_init() -> bool {
     if mi_heap_is_initialized(get_default_heap().as_ref()) {
         return true;
     }
@@ -113,9 +113,9 @@ fn mi_detect_cpu_feature() {
     // TODO to be implemented
 }
 
-#[dtor]
+// #[dtor]
 // called when process is done
-fn mi_process_done() {
+extern "C" fn mi_process_done() {
     if !MI_PROCESS_IS_INITIALIZED.load(Ordering::Acquire) {
         return;
     }
@@ -142,6 +142,10 @@ fn mi_allocator_done() {
 fn mi_process_load() {
     mi_heap_main_init();
     debug_assert!(mi_is_main_thread());
+
+    // use libc atexit instead of dtor
+    unsafe { libc::atexit(mi_process_done) };
+
     _mi_option_init();
     mi_process_setup_auto_thread_done();
     mi_process_init();

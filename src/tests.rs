@@ -3,6 +3,8 @@
 
 // use crate::mimalloc_types::MiHeap;
 
+use crate::init::_mi_heap_init;
+
 macro_rules! test_layout {
     ($type: ty, $size: expr, $align: expr) => {
         paste! {
@@ -16,7 +18,7 @@ macro_rules! test_layout {
                 assert_eq!(
                     ::std::mem::align_of::<$type>(),
                     [<$align usize>],
-                    concat!("Alignment of ", stringify!($type)) 
+                    concat!("Alignment of ", stringify!($type))
                 );
             }
         }
@@ -26,8 +28,13 @@ macro_rules! test_layout {
 // wrong test, should not pass
 // test_layout!(MiHeap, 12, 12);
 
+fn test_init() {
+    _mi_heap_init();
+}
+
 #[test]
 fn success() {
+    test_init();
     assert_eq!(1, 1);
 }
 
