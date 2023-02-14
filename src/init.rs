@@ -298,3 +298,13 @@ fn _mi_heap_set_default_direct(heap: *mut MiHeap) {
 fn _mi_current_thread_count() -> usize {
     THREAD_COUNT.load(Ordering::Relaxed)
 }
+
+mod tests {
+    use super::_mi_current_thread_count;
+
+    #[test]
+    fn test___mi_current_thread_count() {
+        // TODO
+        _mi_current_thread_count();
+    }
+}

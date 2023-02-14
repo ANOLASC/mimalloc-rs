@@ -83,7 +83,7 @@ fn _mi_page_malloc<'a>(
     // TODO check size for huge page
     debug_assert!(page.xblock_size == 0);
 
-    let mut block = page.free.pop_front();
+    let block = page.free.pop_front();
 
     if block.is_none() && page.free.is_empty() {
         // slow path
