@@ -4,6 +4,7 @@ use windows::Win32::System::Threading::{FlsAlloc, FlsSetValue};
 use crate::heap::mi_heap_delete;
 use crate::mimalloc_internal::{_mi_thread_id, get_default_heap, mi_heap_is_initialized};
 use crate::mimalloc_types::{MiHeap, MiTLD, MiThreadData, MiThreadId};
+use crate::os::_mi_os_init;
 use crate::random::_mi_heap_random_next;
 use std::mem::MaybeUninit;
 use std::os::raw::c_void;
@@ -23,7 +24,7 @@ pub fn get_mi_heap_main() -> &'static mut MiHeap {
 }
 
 // Initialize the thread local default heap, called from `mi_thread_init`
-fn mi_heap_init() -> bool {
+fn _mi_heap_init() -> bool {
     if mi_heap_is_initialized(get_default_heap().as_ref()) {
         return true;
     }
@@ -80,16 +81,22 @@ fn mi_thread_data_alloc() -> *mut MiThreadData {
 static MI_PROCESS_IS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[ctor]
-fn mi_proces_init() {
+fn _mi_process_init() {
+    mi_process_load();
+}
+
+fn mi_process_init() {
     if MI_PROCESS_IS_INITIALIZED.load(Ordering::Acquire) {
         return;
     }
 
     MI_PROCESS_IS_INITIALIZED.store(true, Ordering::Release);
 
+    mi_process_setup_auto_thread_done();
+
     // TODO log here
     mi_detect_cpu_feature();
-    mi_os_init();
+    _mi_os_init();
 
     mi_heap_main_init();
     mi_thread_init();
@@ -99,10 +106,6 @@ fn mi_proces_init() {
     }
 
     // TODO support option reserve huge os page and reserve os memory
-}
-
-fn mi_os_init() {
-    // TODO
 }
 
 fn mi_detect_cpu_feature() {
@@ -139,15 +142,17 @@ fn mi_allocator_done() {
 fn mi_process_load() {
     mi_heap_main_init();
     debug_assert!(mi_is_main_thread());
-    mi_option_init();
+    _mi_option_init();
+    mi_process_setup_auto_thread_done();
+    mi_process_init();
 }
 
 // called from `mi_malloc_generic`
 fn mi_thread_init() {
     // ensure process has started already
-    mi_proces_init();
+    mi_process_init();
 
-    if mi_heap_init() {}
+    if _mi_heap_init() {}
 }
 
 static THREAD_COUNT: AtomicUsize = AtomicUsize::new(1);
@@ -249,7 +254,8 @@ fn mi_heap_main_init() {
     }
 }
 
-fn mi_option_init() {}
+fn _mi_option_init() {}
+
 // TODO should MI_FLS_KEY use thread local?
 //thread_local! (static MI_FLS_KEY: u32 = u32::MAX);
 static mut MI_FLS_KEY: u32 = u32::MAX;

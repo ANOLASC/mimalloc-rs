@@ -41,6 +41,18 @@ const MI_SLICES_PER_SEGMENT: usize = MI_SEGMENT_SIZE / MI_SEGMENT_SLICE_SIZE; //
 
 pub type MiArenaIdT = ::std::os::raw::c_int;
 
+pub const MI_SEGMENT_ALIGN: usize = MI_SEGMENT_SIZE;
+pub const MI_SEGMENT_MASK: usize = MI_SEGMENT_ALIGN - 1;
+// may change in other debug mode
+pub const MI_DEBUG_UNINIT: u8 = 0xD0;
+
+pub const MI_KiB: u32 = 1024;
+pub const MI_MiB: u32 = MI_KiB * MI_KiB;
+pub const MI_GiB: u32 = MI_MiB * MI_KiB;
+
+// Used as a special value to encode block sizes in 32 bits.
+pub const MI_HUGE_BLOCK_SIZE: u32 = 2 * MI_GiB;
+
 #[repr(C)]
 struct MiPadding {
     canary: u32, // encoded block value to check validity of the padding (in case of overflow)

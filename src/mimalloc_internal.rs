@@ -1,8 +1,11 @@
+use crate::mimalloc_types::{MiSegmentKind, MI_HUGE_BLOCK_SIZE, MI_SEGMENT_MASK};
 use std::ffi::c_void;
 
 use crate::{
     init::get_mi_heap_main,
-    mimalloc_types::{MiHeap, MiPage, MI_PADDING_SIZE, MI_PAGES_DIRECT, MI_SMALL_SIZE_MAX},
+    mimalloc_types::{
+        MiHeap, MiPage, MiSegment, MI_PADDING_SIZE, MI_PAGES_DIRECT, MI_SMALL_SIZE_MAX,
+    },
 };
 
 #[inline]
@@ -60,5 +63,47 @@ pub fn mi_heap_is_initialized(heap: *const MiHeap) -> bool {
 fn _mi_ptr_cookie(p: *const c_void) -> usize {
     // extern MiHeap _mi_heap_main;
     debug_assert!(get_mi_heap_main().cookie != 0);
-    return (p as usize) ^ get_mi_heap_main().cookie;
+    (p as usize) ^ get_mi_heap_main().cookie
+}
+
+pub fn mi_page_is_huge(page: *const MiPage) -> bool {
+    unsafe { matches!((*_mi_page_segment(page)).kind, MiSegmentKind::MiSegmentHuge) }
+}
+
+// Segment belonging to a page
+fn _mi_page_segment(page: *const MiPage) -> *mut MiSegment {
+    let segment = _mi_ptr_segment(page.cast());
+    // TODO check segment is in range
+    debug_assert!(segment.is_null());
+    segment
+}
+
+// Segment that contains the pointer
+// Large aligned blocks may be aligned at N*MI_SEGMENT_SIZE (inside a huge segment > MI_SEGMENT_SIZE),
+// and we need align "down" to the segment info which is `MI_SEGMENT_SIZE` bytes before it;
+// therefore we align one byte before `p`.
+fn _mi_ptr_segment(p: *const c_void) -> *mut MiSegment {
+    debug_assert!(p.is_null());
+    ((p as usize - 1) & MI_SEGMENT_MASK.reverse_bits()) as *mut MiSegment
+}
+
+// Get the usable block size of a page without fixed padding.
+// This may still include internal padding due to alignment and rounding up size classes.
+pub fn mi_page_usable_block_size(page: *const MiPage) -> usize {
+    mi_page_block_size(page) - MI_PADDING_SIZE
+}
+
+// Get the block size of a page (special case for huge objects)
+fn mi_page_block_size(page: *const MiPage) -> usize {
+    let bsize = unsafe { (*page).xblock_size };
+    debug_assert!(bsize > 0);
+    if bsize < MI_HUGE_BLOCK_SIZE {
+        bsize as usize
+    } else {
+        // TODO
+        todo!("unimplement for huge page");
+        // let psize;
+        // _mi_segment_page_start(_mi_page_segment(page), page, &psize);
+        // return psize;
+    }
 }

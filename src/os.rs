@@ -80,7 +80,7 @@ fn mi_win_virtual_alloc(
     }
 }
 
-fn _mi_os_init() {
+pub fn _mi_os_init() {
     let mut si = SYSTEM_INFO::default();
     unsafe {
         GetSystemInfo(&mut si);

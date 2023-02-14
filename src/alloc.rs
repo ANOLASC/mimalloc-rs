@@ -1,9 +1,12 @@
 // api
 
+use crate::{mimalloc_internal::mi_page_usable_block_size, mimalloc_types::MI_DEBUG_UNINIT};
 use std::{ffi::c_void, ptr, sync::Arc};
 
 use crate::{
-    mimalloc_internal::{_mi_heap_get_free_small_page, _mi_thread_id, get_default_heap},
+    mimalloc_internal::{
+        _mi_heap_get_free_small_page, _mi_thread_id, get_default_heap, mi_page_is_huge,
+    },
     mimalloc_types::{MiBlock, MiHeap, MiPage, MI_PADDING, MI_PADDING_SIZE, MI_SMALL_SIZE_MAX},
 };
 
@@ -65,6 +68,12 @@ fn mi_heap_malloc_small_zero(mut heap: Box<MiHeap>, size: usize, zero: bool) -> 
     _mi_page_malloc(&heap, page, size, zero)
 }
 
+// ------------------------------------------------------
+// Allocation
+// ------------------------------------------------------
+
+// Fast allocation in a page: just pop from the free list.
+// Fall back to generic allocation only if the list is empty.
 fn _mi_page_malloc<'a>(
     heap: &Box<MiHeap>,
     mut page: Box<MiPage>,
@@ -81,17 +90,28 @@ fn _mi_page_malloc<'a>(
         todo!("malloc generic, to be implemented");
     }
 
+    let mut block = block.unwrap();
+
     // TODO check is in that block located in page
     debug_assert!(!page.free.is_empty());
 
     page.used += 1;
 
     if zero {
-        // zero the block
-        // TODO
+        // TODO zero the block
         todo!("zero the block, to be implemented");
     }
 
-    let ptr: *mut MiBlock = block.as_mut().unwrap();
-    unsafe { std::mem::transmute(ptr) }
+    if page.is_zero() != 0 && !zero && !mi_page_is_huge(page.as_ref()) {
+        unsafe {
+            ptr::write_bytes(
+                &mut block,
+                MI_DEBUG_UNINIT,
+                mi_page_usable_block_size(page.as_ref()),
+            );
+        }
+    }
+
+    let ptr: *mut MiBlock = &mut block;
+    ptr as *mut c_void
 }
