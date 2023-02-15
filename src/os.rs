@@ -16,6 +16,8 @@ use windows::{
     },
 };
 
+use crate::mimalloc_types::{MI_KiB, MI_MiB};
+
 // page size (initialized properly in `os_init`)
 pub static OS_PAGE_SIZE: AtomicU32 = AtomicU32::new(4096);
 
@@ -31,7 +33,48 @@ fn _mi_os_alloc_aligned_offset(
     offset: usize,
     commit: bool, /*, bool* large, mi_stats_t* tld_stats */
 ) -> *mut c_void {
+    if size == 0 {
+        return ptr::null_mut();
+    }
+    let size = _mi_os_good_alloc_size(size);
     ptr::null_mut()
+}
+
+// OS (small) page size
+fn _mi_os_page_size() -> usize {
+    OS_PAGE_SIZE.load(Ordering::Relaxed) as usize
+}
+
+// Align upwards
+fn _mi_align_up(sz: usize, alignment: usize) -> usize {
+    debug_assert!(alignment != 0);
+    let mask = alignment - 1;
+    if (alignment & mask) == 0 {
+        // power of two?
+        (sz + mask) & !mask
+    } else {
+        ((sz + mask) / alignment) * alignment
+    }
+}
+
+// round to a good OS allocation size (bounded by max 12.5% waste)
+fn _mi_os_good_alloc_size(size: usize) -> usize {
+    let align_size;
+    if size < 512 * MI_KiB as usize {
+        align_size = _mi_os_page_size();
+    } else if size < 2 * MI_MiB as usize {
+        align_size = 64 * MI_KiB as usize;
+    } else if size < 8 * MI_MiB as usize {
+        align_size = 256 * MI_KiB as usize;
+    } else if size < 32 * MI_MiB as usize {
+        align_size = MI_MiB as usize;
+    } else {
+        align_size = 4 * MI_MiB as usize;
+    }
+    if size >= (usize::MAX - align_size) {
+        return size; // possible overflow?
+    }
+    _mi_align_up(size, align_size)
 }
 
 fn _mi_os_alloc_aligned(
@@ -106,5 +149,31 @@ pub fn _mi_os_init() {
             }
             FreeLibrary(h_dll);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::os::_mi_os_alloc_aligned_offset;
+
+    use super::{_mi_align_up, _mi_os_good_alloc_size};
+
+    #[test]
+    fn test_mi_os_alloc_aligned_offset() {
+        let ptr = _mi_os_alloc_aligned_offset(0, 0, 0, false);
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn test_mi_os_good_alloc_size() {
+        let res = _mi_os_good_alloc_size(23);
+        println!("res: {res}");
+    }
+
+    #[test]
+    fn test_mi_align_up() {
+        assert_eq!(_mi_align_up(17, 7), 21);
+        assert_eq!(_mi_align_up(17, 6), 18);
+        assert_eq!(_mi_align_up(17, 4), 20);
     }
 }
