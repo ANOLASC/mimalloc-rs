@@ -27,17 +27,68 @@ pub static OS_ALLOC_GRANULARITY: AtomicU32 = AtomicU32::new(4096);
 // if non-zero, use large page allocation
 pub static LARGE_OS_PAGE_SIZE: AtomicU32 = AtomicU32::new(0);
 
+/* -----------------------------------------------------------
+  OS aligned allocation with an offset. This is used
+  for large alignments > MI_ALIGNMENT_MAX. We use a large mimalloc
+  page where the object can be aligned at an offset from the start of the segment.
+  As we may need to overallocate, we need to free such pointers using `mi_free_aligned`
+  to use the actual start of the memory region.
+----------------------------------------------------------- */
+
 fn _mi_os_alloc_aligned_offset(
     size: usize,
     alignment: usize,
     offset: usize,
-    commit: bool, /*, bool* large, mi_stats_t* tld_stats */
+    commit: bool,
+    large: *mut bool, /*mi_stats_t* tld_stats */
+) -> *mut c_void {
+    debug_assert!(alignment % _mi_os_page_size() == 0);
+    if offset == 0 {
+        // regular aligned allocation
+        return _mi_os_alloc_aligned(size, alignment, commit, large);
+    }
+    // } else {
+    //     // overallocate to align at an offset
+    //     const size_t extra = _mi_align_up(offset, alignment) - offset;
+    //     const size_t oversize = size + extra;
+    //     void* start = _mi_os_alloc_aligned(oversize, alignment, commit, large, tld_stats);
+    //     if (start == NULL) return NULL;
+    //     void* p = (uint8_t*)start + extra;
+    //     mi_assert(_mi_is_aligned((uint8_t*)p + offset, alignment));
+    //     // decommit the overallocation at the start
+    //     if (commit && extra > _mi_os_page_size()) {
+    //       _mi_os_decommit(start, extra, tld_stats);
+    //     }
+    //     return p;
+    // }
+
+    ptr::null_mut()
+}
+
+fn _mi_os_alloc_aligned(
+    size: usize,
+    alignment: usize,
+    commit: bool,
+    large: *mut bool, /* , mi_stats_t* tld_stats*/
 ) -> *mut c_void {
     if size == 0 {
         return ptr::null_mut();
     }
     let size = _mi_os_good_alloc_size(size);
-    ptr::null_mut()
+    let alignment = _mi_align_up(alignment, _mi_os_page_size());
+    let mut allow_large = false;
+    if !large.is_null() {
+        unsafe {
+            allow_large = *large;
+            large.write(false);
+        }
+    }
+
+    if large.is_null() {
+        mi_os_mem_alloc_aligned(size, alignment, commit, allow_large, &mut allow_large)
+    } else {
+        mi_os_mem_alloc_aligned(size, alignment, commit, allow_large, large)
+    }
 }
 
 // OS (small) page size
@@ -77,21 +128,84 @@ fn _mi_os_good_alloc_size(size: usize) -> usize {
     _mi_align_up(size, align_size)
 }
 
-fn _mi_os_alloc_aligned(
-    size: usize,
-    alignment: usize,
-    commit: bool, /*, bool* large, mi_stats_t* tld_stats */
-) -> *mut c_void {
-    ptr::null_mut()
-}
-
+// Primitive aligned allocation from the OS.
+// This function guarantees the allocated memory is aligned.
 fn mi_os_mem_alloc_aligned(
     size: usize,
     alignment: usize,
     commit: bool,
-    allow_large: bool, /* bool* is_large, mi_stats_t* stats*/
+    allow_large: bool,
+    is_large: *mut bool, /*, mi_stats_t* stats*/
 ) -> *mut c_void {
-    ptr::null_mut()
+    let allow_large = if !commit { false } else { allow_large };
+    // check alignment is power of 2
+    if !(alignment >= _mi_os_page_size() && ((alignment & (alignment - 1)) == 0)) {
+        return ptr::null_mut();
+    }
+    let size = _mi_align_up(size, alignment);
+
+    let mut p = mi_os_mem_alloc(size, alignment, commit, allow_large);
+    if p.is_null() {
+        return ptr::null_mut();
+    }
+
+    // if not aligned, free it, overallocate, and unmap around it
+    if p as usize & alignment != 0 {
+        mi_os_mem_free(p, size, commit);
+        // TODO error log here
+        if size >= (usize::MAX - alignment) {
+            // overflow
+            // TODO error log here
+            return ptr::null_mut();
+        }
+        let over_size = size + alignment;
+
+        if cfg!(Win32) {
+            // over-allocate uncommitted (virtual) memory
+            p = mi_os_mem_alloc(over_size, 0, false, false);
+            if p.is_null() {
+                return ptr::null_mut();
+            }
+
+            // set p to the aligned part in the full region
+            // note: this is dangerous on Windows as VirtualFree needs the actual region pointer
+            // but in mi_os_mem_free we handle this (hopefully exceptional) situation.
+            p = mi_align_up_ptr(p, alignment);
+
+            if commit {
+                _mi_os_commit(p, over_size, ptr::null_mut());
+            }
+        }
+    }
+
+    debug_assert!(p.is_null() || (!p.is_null() && (p as usize % alignment) == 0));
+
+    p
+}
+
+fn _mi_os_commit(
+    addr: *mut c_void,
+    size: usize,
+    is_zero: *mut bool, /*, mi_stats_t* tld_stats */
+) -> bool {
+    // MI_UNUSED(tld_stats);
+    // mi_stats_t * stats = &_mi_stats_main;
+    mi_os_commitx(addr, size, true, false /* liberal */, is_zero)
+    //true
+}
+
+fn mi_os_commitx(
+    addr: *mut c_void,
+    size: usize,
+    commit: bool,
+    conservative: bool,
+    is_zero: *mut bool, /*, mi_stats_t* stats */
+) -> bool {
+    true
+}
+
+fn mi_align_up_ptr(p: *mut c_void, alignment: usize) -> *mut c_void {
+    _mi_align_up(p as usize, alignment) as *mut c_void
 }
 
 fn mi_os_mem_alloc(
@@ -152,15 +266,29 @@ pub fn _mi_os_init() {
     }
 }
 
+/* -----------------------------------------------------------
+  Free memory
+-------------------------------------------------------------- */
+
+fn mi_os_mem_free(
+    addr: *mut c_void,
+    size: usize,
+    was_committed: bool, /* , mi_stats_t* stats*/
+) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
+    use std::ptr;
+
     use crate::os::_mi_os_alloc_aligned_offset;
 
     use super::{_mi_align_up, _mi_os_good_alloc_size};
 
     #[test]
     fn test_mi_os_alloc_aligned_offset() {
-        let ptr = _mi_os_alloc_aligned_offset(0, 0, 0, false);
+        let ptr = _mi_os_alloc_aligned_offset(0, 0, 0, false, ptr::null_mut());
         assert!(ptr.is_null());
     }
 
