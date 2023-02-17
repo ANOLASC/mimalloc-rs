@@ -1,7 +1,7 @@
 use std::{
     ffi::c_void,
     ptr,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 use windows::{
@@ -10,7 +10,10 @@ use windows::{
         Foundation::HINSTANCE,
         System::{
             LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryA},
-            Memory::{self, VirtualAlloc, PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE},
+            Memory::{
+                self, VirtualAlloc, MEM_COMMIT, MEM_LARGE_PAGES, MEM_RESERVE,
+                PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
+            },
             SystemInformation::{GetSystemInfo, SYSTEM_INFO},
         },
     },
@@ -26,6 +29,17 @@ pub static OS_ALLOC_GRANULARITY: AtomicU32 = AtomicU32::new(4096);
 
 // if non-zero, use large page allocation
 pub static LARGE_OS_PAGE_SIZE: AtomicU32 = AtomicU32::new(0);
+
+struct MiMemAddressRequirements {
+    lowest_starting_address: *mut c_void,
+    highest_ending_address: *mut c_void,
+    alignment: usize,
+}
+
+//  struct MI_MEM_EXTENDED_PARAMETER_S {
+//     Type: struct { u64 Type: 8; DWORD64 Reserved : 56; },
+//     union  { DWORD64 ULong64; PVOID Pointer; SIZE_T Size; HANDLE Handle; DWORD ULong; } Arg;
+//   } MI_MEM_EXTENDED_PARAMETER;
 
 /* -----------------------------------------------------------
   OS aligned allocation with an offset. This is used
@@ -144,7 +158,7 @@ fn mi_os_mem_alloc_aligned(
     }
     let size = _mi_align_up(size, alignment);
 
-    let mut p = mi_os_mem_alloc(size, alignment, commit, allow_large);
+    let mut p = mi_os_mem_alloc(size, alignment, commit, allow_large, is_large);
     if p.is_null() {
         return ptr::null_mut();
     }
@@ -162,7 +176,7 @@ fn mi_os_mem_alloc_aligned(
 
         if cfg!(Win32) {
             // over-allocate uncommitted (virtual) memory
-            p = mi_os_mem_alloc(over_size, 0, false, false);
+            p = mi_os_mem_alloc(over_size, 0, false, false, is_large);
             if p.is_null() {
                 return ptr::null_mut();
             }
@@ -212,30 +226,157 @@ fn mi_os_mem_alloc(
     size: usize,
     try_alignment: usize,
     commit: bool,
-    allow_large: bool, /*bool* is_large, mi_stats_t* stats*/
+    allow_large: bool,
+    is_large: *mut bool, /*mi_stats_t* stats*/
 ) -> *mut c_void {
-    if cfg!(windows) {}
+    debug_assert!(size > 0 && (size & _mi_os_page_size()) == 0);
+    if size == 0 {
+        return ptr::null_mut();
+    }
+    let allow_large = if !commit { false } else { allow_large };
+    let try_alignment = if try_alignment == 0 { 1 } else { try_alignment };
+    let mut p = ptr::null_mut();
 
-    ptr::null_mut()
+    if cfg!(Win32) {
+        let mut flags = MEM_RESERVE;
+        if commit {
+            flags |= MEM_COMMIT;
+        }
+
+        p = mi_win_virtual_alloc(
+            ptr::null_mut(),
+            size,
+            try_alignment,
+            flags.0,
+            false,
+            allow_large,
+            is_large,
+        );
+    }
+
+    p
+}
+
+fn use_large_os_page(size: usize, alignment: usize) -> bool {
+    // // if we have access, check the size and alignment requirements
+    // if LARGE_OS_PAGE_SIZE == 0 || !mi_option_is_enabled(mi_option_large_os_pages) {
+    //     return false;
+    // }
+    (size as u32 % LARGE_OS_PAGE_SIZE.load(Ordering::Relaxed)) == 0
+        && (alignment as u32 % LARGE_OS_PAGE_SIZE.load(Ordering::Relaxed)) == 0
 }
 
 fn mi_win_virtual_alloc(
     addr: *mut c_void,
     size: usize,
     try_alignment: usize,
-    flags: usize,
+    flags: u32,
     large_only: bool,
-    allow_large: bool, /* , bool* is_large */
+    allow_large: bool,
+    is_large: *mut bool,
 ) -> *mut c_void {
-    unsafe {
-        VirtualAlloc(
-            Some(addr.cast_const()),
-            size,
-            VIRTUAL_ALLOCATION_TYPE(flags as u32),
-            PAGE_PROTECTION_FLAGS(0x04),
-        )
+    debug_assert!(!(large_only && !allow_large));
+    static large_page_try_ok: AtomicUsize = AtomicUsize::new(0);
+
+    let mut p = ptr::null_mut();
+    // Try to allocate large OS pages (2MiB) if allowed or required.
+    if (large_only || use_large_os_page(size, try_alignment))
+        && allow_large
+        && (flags & MEM_COMMIT.0) != 0
+        && (flags & MEM_RESERVE.0) != 0
+    {
+        let try_ok = large_page_try_ok.load(Ordering::Acquire);
+        if !large_only && try_ok > 0 {
+            if large_page_try_ok
+                .compare_exchange(try_ok, try_ok - 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {}
+        } else {
+            // large OS pages must always reserve and commit.
+            unsafe {
+                is_large.write(true);
+            }
+
+            p = mi_win_virtual_allocx(addr, size, try_alignment, flags | MEM_LARGE_PAGES.0);
+
+            if large_only {
+                return p;
+            }
+
+            // fall back to non-large page allocation on error (`p == NULL`).
+            if p.is_null() {
+                large_page_try_ok.store(10, Ordering::Release);
+            }
+        }
     }
+
+    // Fall back to regular page allocation
+    if p.is_null() {
+        unsafe { is_large.write((flags & MEM_LARGE_PAGES.0) != 0) };
+        p = mi_win_virtual_allocx(addr, size, try_alignment, flags);
+    }
+
+    if p.is_null() {
+        // TODO error log here
+    }
+
+    p
 }
+
+#[cfg(windows)]
+fn mi_win_virtual_allocx(
+    addr: *mut c_void,
+    size: usize,
+    try_alignment: usize,
+    flags: u32,
+) -> *mut c_void {
+    use windows::Win32::System::Memory::PAGE_READWRITE;
+
+    if cfg!(target_pointer_width = "64") {
+        // on 64-bit systems, try to use the virtual address area after 2TiB for 4MiB aligned allocations
+        if addr.is_null() {
+            let hint = mi_os_get_aligned_hint(try_alignment, size);
+            if !hint.is_null() {
+                let p = unsafe {
+                    VirtualAlloc(
+                        Some(hint),
+                        size,
+                        VIRTUAL_ALLOCATION_TYPE(flags),
+                        PAGE_READWRITE,
+                    )
+                };
+
+                if !p.is_null() {
+                    return p;
+                }
+                // TODO error log here
+            }
+        }
+    }
+
+    // on modern Windows try use VirtualAlloc2 for aligned allocation
+    // let a = VirtualAlloc2();
+    // if try_alignment > 1 && (try_alignment % _mi_os_page_size()) == 0 && P_VIRTUAL_ALLOC2.is_some() {
+    //     let reqs = MiMemAddressRequirements{ lowest_starting_address: ptr::null_mut(), highest_ending_address: ptr::null_mut(), alignment: 0 };
+    //     reqs.alignment = try_alignment;
+    //     MI_MEM_EXTENDED_PARAMETER param = { {0, 0}, {0} };
+    //     param.Type.Type = MiMemExtendedParameterAddressRequirements;
+    //     param.Arg.Pointer = &reqs;
+    //     void* p = (*P_VIRTUAL_ALLOC2)(GetCurrentProcess(), addr, size, flags, PAGE_READWRITE, &param, 1);
+    //     if (p != NULL) return p;
+    //     _mi_warning_message("unable to allocate aligned OS memory (%zu bytes, error code: 0x%x, address: %p, alignment: %zu, flags: 0x%x)\n", size, GetLastError(), addr, try_alignment, flags);
+    //     // fall through on error
+    //   }
+    //   // last resort
+    //   return VirtualAlloc(addr, size, flags, PAGE_READWRITE);
+    ptr::null_mut()
+}
+
+fn mi_os_get_aligned_hint(try_alignment: usize, size: usize) -> *const c_void {
+    ptr::null_mut()
+}
+
+pub static mut P_VIRTUAL_ALLOC2: Option<unsafe extern "system" fn() -> isize> = None;
 
 pub fn _mi_os_init() {
     let mut si = SYSTEM_INFO::default();
@@ -256,10 +397,10 @@ pub fn _mi_os_init() {
     if let Ok(h_dll) = h_dll {
         // use VirtualAlloc2FromApp if possible as it is available to Windows store apps
         unsafe {
-            let mut pVirtualAlloc2 =
+            P_VIRTUAL_ALLOC2 =
                 GetProcAddress(h_dll, PCSTR::from_raw("VirtualAlloc2FromApp".as_ptr()));
-            if pVirtualAlloc2.is_none() {
-                pVirtualAlloc2 = GetProcAddress(h_dll, PCSTR::from_raw("VirtualAlloc2".as_ptr()));
+            if P_VIRTUAL_ALLOC2.is_none() {
+                P_VIRTUAL_ALLOC2 = GetProcAddress(h_dll, PCSTR::from_raw("VirtualAlloc2".as_ptr()));
             }
             FreeLibrary(h_dll);
         }
