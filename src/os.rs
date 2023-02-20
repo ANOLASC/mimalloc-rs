@@ -19,7 +19,7 @@ use windows::{
     },
 };
 
-use crate::mimalloc_types::{MI_KiB, MI_MiB};
+use crate::mimalloc_types::{BitfieldUnit, MI_KiB, MI_MiB};
 
 // page size (initialized properly in `os_init`)
 pub static OS_PAGE_SIZE: AtomicU32 = AtomicU32::new(4096);
@@ -36,10 +36,111 @@ struct MiMemAddressRequirements {
     alignment: usize,
 }
 
-//  struct MI_MEM_EXTENDED_PARAMETER_S {
+//  struct MiMemExtendedParameter {
 //     Type: struct { u64 Type: 8; DWORD64 Reserved : 56; },
 //     union  { DWORD64 ULong64; PVOID Pointer; SIZE_T Size; HANDLE Handle; DWORD ULong; } Arg;
 //   } MI_MEM_EXTENDED_PARAMETER;
+
+#[cfg(windows)]
+#[repr(C)]
+enum MiMemExtendedParameterType {
+    MiMemExtendedParameterInvalidType = 0,
+    MiMemExtendedParameterAddressRequirements,
+    MiMemExtendedParameterNumaNode,
+    MiMemExtendedParameterPartitionHandle,
+    MiMemExtendedParameterUserPhysicalHandle,
+    MiMemExtendedParameterAttributeFlags,
+    MiMemExtendedParameterMax,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct MiMemExtendedParameter {
+    pub ty: MiMemExtendedParameterBindgenTy1,
+    pub arg: MiMemExtendedParameterBindgenTy2,
+}
+#[repr(C)]
+#[repr(align(8))]
+#[derive(Debug, Copy, Clone)]
+pub struct MiMemExtendedParameterBindgenTy1 {
+    pub _bitfield_1: BitfieldUnit<[u8; 8usize], u64>,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub union MiMemExtendedParameterBindgenTy2 {
+    pub ULong64: DWORD64,
+    pub Pointer: PVOID,
+    pub Size: SIZE_T,
+    pub Handle: HANDLE,
+    pub ULong: DWORD,
+    _bindgen_union_align: u64,
+}
+
+#[test]
+fn bindgen_test_layout_MiMemExtendedParameter__bindgen_ty_1() {
+    assert_eq!(
+        ::std::mem::size_of::<MiMemExtendedParameterBindgenTy1>(),
+        8usize,
+        concat!(
+            "Size of: ",
+            stringify!(MiMemExtendedParameter__bindgen_ty_1)
+        )
+    );
+    assert_eq!(
+        ::std::mem::align_of::<MiMemExtendedParameterBindgenTy1>(),
+        8usize,
+        concat!(
+            "Alignment of ",
+            stringify!(MiMemExtendedParameter__bindgen_ty_1)
+        )
+    );
+}
+impl MiMemExtendedParameterBindgenTy1 {
+    #[inline]
+    pub fn Type(&self) -> DWORD64 {
+        unsafe { ::std::mem::transmute(self._bitfield_1.get(0usize, 8u8) as u64) }
+    }
+    #[inline]
+    pub fn set_Type(&mut self, val: DWORD64) {
+        unsafe {
+            let val: u64 = ::std::mem::transmute(val);
+            self._bitfield_1.set(0usize, 8u8, val as u64)
+        }
+    }
+    #[inline]
+    pub fn Reserved(&self) -> DWORD64 {
+        unsafe { ::std::mem::transmute(self._bitfield_1.get(8usize, 56u8) as u64) }
+    }
+    #[inline]
+    pub fn set_Reserved(&mut self, val: DWORD64) {
+        unsafe {
+            let val: u64 = ::std::mem::transmute(val);
+            self._bitfield_1.set(8usize, 56u8, val as u64)
+        }
+    }
+    #[inline]
+    pub fn new_bitfield_1(Type: DWORD64, Reserved: DWORD64) -> BitfieldUnit<[u8; 8usize], u64> {
+        let mut __bindgen_bitfield_unit: BitfieldUnit<[u8; 8usize], u64> = Default::default();
+        __bindgen_bitfield_unit.set(0usize, 8u8, {
+            let Type: u64 = unsafe { ::std::mem::transmute(Type) };
+            Type as u64
+        });
+        __bindgen_bitfield_unit.set(8usize, 56u8, {
+            let Reserved: u64 = unsafe { ::std::mem::transmute(Reserved) };
+            Reserved as u64
+        });
+        __bindgen_bitfield_unit
+    }
+}
+
+pub type DWORD64 = ::std::os::raw::c_ulonglong;
+pub type PVOID = *mut ::std::os::raw::c_void;
+pub type DWORD = ::std::os::raw::c_ulong;
+pub type ULONG_PTR = ::std::os::raw::c_ulonglong;
+pub type SIZE_T = ULONG_PTR;
+pub type HANDLE = *mut ::std::os::raw::c_void;
+pub type PHANDLE = *mut HANDLE;
 
 /* -----------------------------------------------------------
   OS aligned allocation with an offset. This is used
@@ -356,17 +457,33 @@ fn mi_win_virtual_allocx(
 
     // on modern Windows try use VirtualAlloc2 for aligned allocation
     // let a = VirtualAlloc2();
-    // if try_alignment > 1 && (try_alignment % _mi_os_page_size()) == 0 && P_VIRTUAL_ALLOC2.is_some() {
-    //     let reqs = MiMemAddressRequirements{ lowest_starting_address: ptr::null_mut(), highest_ending_address: ptr::null_mut(), alignment: 0 };
-    //     reqs.alignment = try_alignment;
-    //     MI_MEM_EXTENDED_PARAMETER param = { {0, 0}, {0} };
-    //     param.Type.Type = MiMemExtendedParameterAddressRequirements;
-    //     param.Arg.Pointer = &reqs;
-    //     void* p = (*P_VIRTUAL_ALLOC2)(GetCurrentProcess(), addr, size, flags, PAGE_READWRITE, &param, 1);
-    //     if (p != NULL) return p;
-    //     _mi_warning_message("unable to allocate aligned OS memory (%zu bytes, error code: 0x%x, address: %p, alignment: %zu, flags: 0x%x)\n", size, GetLastError(), addr, try_alignment, flags);
-    //     // fall through on error
-    //   }
+    if try_alignment > 1
+        && (try_alignment % _mi_os_page_size()) == 0
+        && unsafe { P_VIRTUAL_ALLOC2.is_some() }
+    {
+        let mut reqs = MiMemAddressRequirements {
+            lowest_starting_address: ptr::null_mut(),
+            highest_ending_address: ptr::null_mut(),
+            alignment: 0,
+        };
+        reqs.alignment = try_alignment;
+        let mut param = MiMemExtendedParameter {
+            ty: MiMemExtendedParameterBindgenTy1 {
+                _bitfield_1: BitfieldUnit::new([0; 8]),
+            },
+            arg: MiMemExtendedParameterBindgenTy2 {
+                Pointer: ptr::null_mut(),
+            },
+        };
+        param.ty.set_Type(
+            MiMemExtendedParameterType::MiMemExtendedParameterAddressRequirements as DWORD64,
+        );
+        //     param.Arg.Pointer = &reqs;
+        //     void* p = (*P_VIRTUAL_ALLOC2)(GetCurrentProcess(), addr, size, flags, PAGE_READWRITE, &param, 1);
+        //     if (p != NULL) return p;
+        //     _mi_warning_message("unable to allocate aligned OS memory (%zu bytes, error code: 0x%x, address: %p, alignment: %zu, flags: 0x%x)\n", size, GetLastError(), addr, try_alignment, flags);
+        //     // fall through on error
+    }
     //   // last resort
     //   return VirtualAlloc(addr, size, flags, PAGE_READWRITE);
     ptr::null_mut()
@@ -423,7 +540,9 @@ fn mi_os_mem_free(
 mod tests {
     use std::ptr;
 
-    use crate::os::_mi_os_alloc_aligned_offset;
+    use crate::os::{
+        MiMemExtendedParameter, MiMemExtendedParameterBindgenTy2, _mi_os_alloc_aligned_offset,
+    };
 
     use super::{_mi_align_up, _mi_os_good_alloc_size};
 
@@ -445,4 +564,122 @@ mod tests {
         assert_eq!(_mi_align_up(17, 6), 18);
         assert_eq!(_mi_align_up(17, 4), 20);
     }
+
+    // #[test]
+    // fn bindgen_test_layout_MiMemExtendedParameter__bindgen_ty_2() {
+    //     assert_eq!(
+    //         ::std::mem::size_of::<MiMemExtendedParameterBindgenTy2>(),
+    //         8usize,
+    //         concat!(
+    //             "Size of: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         ::std::mem::align_of::<MiMemExtendedParameterBindgenTy2>(),
+    //         8usize,
+    //         concat!(
+    //             "Alignment of ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         unsafe {
+    //             &(*(::std::ptr::null::<MiMemExtendedParameterBindgenTy2>())).ULong64 as *const _
+    //                 as usize
+    //         },
+    //         0usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2),
+    //             "::",
+    //             stringify!(ULong64)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         unsafe {
+    //             &(*(::std::ptr::null::<MiMemExtendedParameterBindgenTy2>())).Pointer as *const _
+    //                 as usize
+    //         },
+    //         0usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2),
+    //             "::",
+    //             stringify!(Pointer)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         unsafe {
+    //             &(*(::std::ptr::null::<MiMemExtendedParameterBindgenTy2>())).Size as *const _
+    //                 as usize
+    //         },
+    //         0usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2),
+    //             "::",
+    //             stringify!(Size)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         unsafe {
+    //             &(*(::std::ptr::null::<MiMemExtendedParameterBindgenTy2>())).Handle as *const _
+    //                 as usize
+    //         },
+    //         0usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2),
+    //             "::",
+    //             stringify!(Handle)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         unsafe {
+    //             &(*(::std::ptr::null::<MiMemExtendedParameterBindgenTy2>())).ULong as *const _
+    //                 as usize
+    //         },
+    //         0usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_2),
+    //             "::",
+    //             stringify!(ULong)
+    //         )
+    //     );
+    // }
+    // #[test]
+    // fn bindgen_test_layout_MiMemExtendedParameter() {
+    //     assert_eq!(
+    //         ::std::mem::size_of::<MiMemExtendedParameter>(),
+    //         16usize,
+    //         concat!("Size of: ", stringify!(MiMemExtendedParameter))
+    //     );
+    //     assert_eq!(
+    //         ::std::mem::align_of::<MiMemExtendedParameter>(),
+    //         8usize,
+    //         concat!("Alignment of ", stringify!(MiMemExtendedParameter))
+    //     );
+    //     assert_eq!(
+    //         unsafe { &(*(::std::ptr::null::<MiMemExtendedParameter>())).ty as *const _ as usize },
+    //         0usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter),
+    //             "::",
+    //             stringify!(Type)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         unsafe { &(*(::std::ptr::null::<MiMemExtendedParameter>())).arg as *const _ as usize },
+    //         8usize,
+    //         concat!(
+    //             "Offset of field: ",
+    //             stringify!(MiMemExtendedParameter),
+    //             "::",
+    //             stringify!(Arg)
+    //         )
+    //     );
+    // }
 }
