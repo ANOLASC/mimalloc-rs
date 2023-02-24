@@ -4,6 +4,7 @@ mod heap;
 mod init;
 mod mimalloc_internal;
 mod mimalloc_types;
+mod options;
 mod os;
 mod page;
 mod random;

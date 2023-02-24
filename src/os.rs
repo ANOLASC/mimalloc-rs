@@ -21,7 +21,11 @@ use windows::{
     },
 };
 
-use crate::mimalloc_types::{BitfieldUnit, MI_KiB, MI_MiB};
+use crate::{
+    mimalloc_types::MiOption::MiOptionLargeOsPages,
+    mimalloc_types::{BitfieldUnit, MI_KiB, MI_MiB},
+    options::mi_option_is_enabled,
+};
 
 // page size (initialized properly in `os_init`)
 pub static OS_PAGE_SIZE: AtomicU32 = AtomicU32::new(4096);
@@ -340,7 +344,7 @@ fn mi_os_mem_alloc(
     let try_alignment = if try_alignment == 0 { 1 } else { try_alignment };
     let mut p = ptr::null_mut();
 
-    if cfg!(Win32) {
+    if cfg!(windows) {
         let mut flags = MEM_RESERVE;
         if commit {
             flags |= MEM_COMMIT;
@@ -362,9 +366,12 @@ fn mi_os_mem_alloc(
 
 fn use_large_os_page(size: usize, alignment: usize) -> bool {
     // // if we have access, check the size and alignment requirements
-    // if LARGE_OS_PAGE_SIZE == 0 || !mi_option_is_enabled(mi_option_large_os_pages) {
-    //     return false;
-    // }
+    if LARGE_OS_PAGE_SIZE.load(Ordering::Relaxed) == 0
+        || !mi_option_is_enabled(MiOptionLargeOsPages)
+    {
+        return false;
+    }
+
     (size as u32 % LARGE_OS_PAGE_SIZE.load(Ordering::Relaxed)) == 0
         && (alignment as u32 % LARGE_OS_PAGE_SIZE.load(Ordering::Relaxed)) == 0
 }
@@ -378,7 +385,7 @@ fn mi_win_virtual_alloc(
     allow_large: bool,
     is_large: *mut bool,
 ) -> *mut c_void {
-    debug_assert!(!(large_only && !allow_large));
+    debug_assert!(!large_only || allow_large);
     static large_page_try_ok: AtomicUsize = AtomicUsize::new(0);
 
     let mut p = ptr::null_mut();
@@ -585,6 +592,7 @@ mod tests {
 
     use crate::os::{
         MiMemExtendedParameter, MiMemExtendedParameterBindgenTy2, _mi_os_alloc_aligned_offset,
+        mi_os_mem_alloc,
     };
 
     use super::{
@@ -632,6 +640,11 @@ mod tests {
             size_of::<MEM_EXTENDED_PARAMETER>(),
             size_of::<MiMemExtendedParameter>()
         );
+    }
+
+    #[test]
+    fn test_mi_os_mem_alloc() {
+        assert!(!mi_os_mem_alloc(33554432, 33554432, true, true, &mut false).is_null());
     }
 
     // #[test]
