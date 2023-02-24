@@ -1,18 +1,20 @@
 use std::{
     ffi::c_void,
+    mem::transmute,
     ptr,
     sync::atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 use windows::{
     core::PCSTR,
+    s,
     Win32::{
-        Foundation::HINSTANCE,
+        Foundation::{self, HINSTANCE},
         System::{
-            LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryA},
+            LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryA, LoadLibraryW},
             Memory::{
-                self, VirtualAlloc, MEM_COMMIT, MEM_LARGE_PAGES, MEM_RESERVE,
-                PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
+                self, VirtualAlloc, MEM_ADDRESS_REQUIREMENTS, MEM_COMMIT, MEM_EXTENDED_PARAMETER,
+                MEM_LARGE_PAGES, MEM_RESERVE, PAGE_PROTECTION_FLAGS, VIRTUAL_ALLOCATION_TYPE,
             },
             SystemInformation::{GetSystemInfo, SYSTEM_INFO},
         },
@@ -30,28 +32,43 @@ pub static OS_ALLOC_GRANULARITY: AtomicU32 = AtomicU32::new(4096);
 // if non-zero, use large page allocation
 pub static LARGE_OS_PAGE_SIZE: AtomicU32 = AtomicU32::new(0);
 
-struct MiMemAddressRequirements {
-    lowest_starting_address: *mut c_void,
-    highest_ending_address: *mut c_void,
-    alignment: usize,
-}
+pub type ULONG = ::std::os::raw::c_ulong;
+
+// struct MiMemAddressRequirements {
+//     lowest_starting_address: *mut c_void,
+//     highest_ending_address: *mut c_void,
+//     alignment: usize,
+// }
+
+// #[repr(transparent)]
+// struct MiMemAddressRequirements(MEM_ADDRESS_REQUIREMENTS);
 
 //  struct MiMemExtendedParameter {
 //     Type: struct { u64 Type: 8; DWORD64 Reserved : 56; },
 //     union  { DWORD64 ULong64; PVOID Pointer; SIZE_T Size; HANDLE Handle; DWORD ULong; } Arg;
 //   } MI_MEM_EXTENDED_PARAMETER;
 
-#[cfg(windows)]
-#[repr(C)]
-enum MiMemExtendedParameterType {
-    MiMemExtendedParameterInvalidType = 0,
-    MiMemExtendedParameterAddressRequirements,
-    MiMemExtendedParameterNumaNode,
-    MiMemExtendedParameterPartitionHandle,
-    MiMemExtendedParameterUserPhysicalHandle,
-    MiMemExtendedParameterAttributeFlags,
-    MiMemExtendedParameterMax,
-}
+// struct U<const N:usize>;
+// trait UN { type Int; }
+// impl UN for U<32> { type Int = u32; }
+// impl UN for U<64> { type Int = u64; }
+// type UInt<const N:usize> = <U<N> as UN>::Int;
+// let a: UInt<{8*std::mem::size_of::<[u8; 8]>()}> = 0u64;
+// a
+
+// #[cfg(windows)]
+// #[repr(C)]
+// enum MiMemExtendedParameterType {
+//     MiMemExtendedParameterInvalidType = 0,
+//     MiMemExtendedParameterAddressRequirements,
+//     MiMemExtendedParameterNumaNode,
+//     MiMemExtendedParameterPartitionHandle,
+//     MiMemExtendedParameterUserPhysicalHandle,
+//     MiMemExtendedParameterAttributeFlags,
+//     MiMemExtendedParameterMax,
+// }
+
+// type a = MEM_EXTENDED_PARAMETER;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -59,8 +76,12 @@ pub struct MiMemExtendedParameter {
     pub ty: MiMemExtendedParameterBindgenTy1,
     pub arg: MiMemExtendedParameterBindgenTy2,
 }
+
+// #[repr(transparent)]
+// pub struct MiMemExtendedParameter(MEM_EXTENDED_PARAMETER);
+
 #[repr(C)]
-#[repr(align(8))]
+// #[repr(align(8))]
 #[derive(Debug, Copy, Clone)]
 pub struct MiMemExtendedParameterBindgenTy1 {
     pub _bitfield_1: BitfieldUnit<[u8; 8usize], u64>,
@@ -77,25 +98,6 @@ pub union MiMemExtendedParameterBindgenTy2 {
     _bindgen_union_align: u64,
 }
 
-#[test]
-fn bindgen_test_layout_MiMemExtendedParameter__bindgen_ty_1() {
-    assert_eq!(
-        ::std::mem::size_of::<MiMemExtendedParameterBindgenTy1>(),
-        8usize,
-        concat!(
-            "Size of: ",
-            stringify!(MiMemExtendedParameter__bindgen_ty_1)
-        )
-    );
-    assert_eq!(
-        ::std::mem::align_of::<MiMemExtendedParameterBindgenTy1>(),
-        8usize,
-        concat!(
-            "Alignment of ",
-            stringify!(MiMemExtendedParameter__bindgen_ty_1)
-        )
-    );
-}
 impl MiMemExtendedParameterBindgenTy1 {
     #[inline]
     pub fn Type(&self) -> DWORD64 {
@@ -431,7 +433,10 @@ fn mi_win_virtual_allocx(
     try_alignment: usize,
     flags: u32,
 ) -> *mut c_void {
-    use windows::Win32::System::Memory::PAGE_READWRITE;
+    use windows::Win32::System::{
+        Memory::{MemExtendedParameterAddressRequirements, PAGE_READWRITE},
+        Threading::GetCurrentProcess,
+    };
 
     if cfg!(target_pointer_width = "64") {
         // on 64-bit systems, try to use the virtual address area after 2TiB for 4MiB aligned allocations
@@ -456,44 +461,78 @@ fn mi_win_virtual_allocx(
     }
 
     // on modern Windows try use VirtualAlloc2 for aligned allocation
-    // let a = VirtualAlloc2();
     if try_alignment > 1
         && (try_alignment % _mi_os_page_size()) == 0
         && unsafe { P_VIRTUAL_ALLOC2.is_some() }
     {
-        let mut reqs = MiMemAddressRequirements {
-            lowest_starting_address: ptr::null_mut(),
-            highest_ending_address: ptr::null_mut(),
-            alignment: 0,
+        // let mut reqs = MiMemAddressRequirements {
+        //     lowest_starting_address: ptr::null_mut(),
+        //     highest_ending_address: ptr::null_mut(),
+        //     alignment: try_alignment,
+        // };
+
+        let mut reqs = MEM_ADDRESS_REQUIREMENTS {
+            Alignment: try_alignment,
+            ..Default::default()
         };
-        reqs.alignment = try_alignment;
+
         let mut param = MiMemExtendedParameter {
             ty: MiMemExtendedParameterBindgenTy1 {
                 _bitfield_1: BitfieldUnit::new([0; 8]),
             },
             arg: MiMemExtendedParameterBindgenTy2 {
-                Pointer: ptr::null_mut(),
+                Pointer: ptr::addr_of_mut!(reqs).cast(),
             },
         };
-        param.ty.set_Type(
-            MiMemExtendedParameterType::MiMemExtendedParameterAddressRequirements as DWORD64,
-        );
-        //     param.Arg.Pointer = &reqs;
-        //     void* p = (*P_VIRTUAL_ALLOC2)(GetCurrentProcess(), addr, size, flags, PAGE_READWRITE, &param, 1);
-        //     if (p != NULL) return p;
-        //     _mi_warning_message("unable to allocate aligned OS memory (%zu bytes, error code: 0x%x, address: %p, alignment: %zu, flags: 0x%x)\n", size, GetLastError(), addr, try_alignment, flags);
-        //     // fall through on error
+        param
+            .ty
+            .set_Type(MemExtendedParameterAddressRequirements.0 as u64);
+
+        let p = unsafe {
+            P_VIRTUAL_ALLOC2.unwrap()(
+                GetCurrentProcess(),
+                addr,
+                size as SIZE_T,
+                flags,
+                PAGE_READWRITE.0,
+                ptr::addr_of_mut!(param).cast(),
+                1,
+            )
+        };
+        if !p.is_null() {
+            return p;
+        }
+        println!("virtual_alloc2 failed");
+
+        // _mi_warning_message("unable to allocate aligned OS memory (%zu bytes, error code: 0x%x, address: %p, alignment: %zu, flags: 0x%x)\n", size, GetLastError(), addr, try_alignment, flags);
+        // fall through on error
     }
-    //   // last resort
-    //   return VirtualAlloc(addr, size, flags, PAGE_READWRITE);
-    ptr::null_mut()
+    // last resort
+    unsafe {
+        VirtualAlloc(
+            Some(addr),
+            size,
+            VIRTUAL_ALLOCATION_TYPE(flags),
+            PAGE_READWRITE,
+        )
+    }
 }
 
 fn mi_os_get_aligned_hint(try_alignment: usize, size: usize) -> *const c_void {
     ptr::null_mut()
 }
 
-pub static mut P_VIRTUAL_ALLOC2: Option<unsafe extern "system" fn() -> isize> = None;
+type PVirtualAlloc2 = unsafe extern "stdcall" fn(
+    Foundation::HANDLE,
+    PVOID,
+    SIZE_T,
+    ULONG,
+    ULONG,
+    *mut MEM_EXTENDED_PARAMETER,
+    ULONG,
+) -> PVOID;
+
+pub static mut P_VIRTUAL_ALLOC2: Option<PVirtualAlloc2> = None;
 
 pub fn _mi_os_init() {
     let mut si = SYSTEM_INFO::default();
@@ -510,14 +549,13 @@ pub fn _mi_os_init() {
     }
 
     // TODO What if use win32 crate VirtualAlloc?
-    let h_dll = unsafe { LoadLibraryA::<PCSTR>(PCSTR::from_raw("kernelbase.dll".as_ptr())) };
+    let h_dll = unsafe { LoadLibraryA(s!("kernelbase.dll")) };
     if let Ok(h_dll) = h_dll {
         // use VirtualAlloc2FromApp if possible as it is available to Windows store apps
         unsafe {
-            P_VIRTUAL_ALLOC2 =
-                GetProcAddress(h_dll, PCSTR::from_raw("VirtualAlloc2FromApp".as_ptr()));
+            P_VIRTUAL_ALLOC2 = transmute(GetProcAddress(h_dll, s!("VirtualAlloc2FromApp")));
             if P_VIRTUAL_ALLOC2.is_none() {
-                P_VIRTUAL_ALLOC2 = GetProcAddress(h_dll, PCSTR::from_raw("VirtualAlloc2".as_ptr()));
+                P_VIRTUAL_ALLOC2 = transmute(GetProcAddress(h_dll, s!("VirtualAlloc2")));
             }
             FreeLibrary(h_dll);
         }
@@ -538,13 +576,20 @@ fn mi_os_mem_free(
 
 #[cfg(test)]
 mod tests {
-    use std::ptr;
+    use std::{mem::size_of, os::raw::c_void, ptr};
+
+    use windows::Win32::System::{
+        Memory::{MEM_COMMIT, MEM_EXTENDED_PARAMETER, MEM_RESERVE},
+        Threading::GetCurrentProcess,
+    };
 
     use crate::os::{
         MiMemExtendedParameter, MiMemExtendedParameterBindgenTy2, _mi_os_alloc_aligned_offset,
     };
 
-    use super::{_mi_align_up, _mi_os_good_alloc_size};
+    use super::{
+        _mi_align_up, _mi_os_good_alloc_size, _mi_os_init, _mi_os_page_size, mi_win_virtual_allocx,
+    };
 
     #[test]
     fn test_mi_os_alloc_aligned_offset() {
@@ -563,6 +608,30 @@ mod tests {
         assert_eq!(_mi_align_up(17, 7), 21);
         assert_eq!(_mi_align_up(17, 6), 18);
         assert_eq!(_mi_align_up(17, 4), 20);
+    }
+
+    #[test]
+    fn test_mi_win_virtual_allocx() {
+        let addr = ptr::null_mut();
+        _mi_os_init();
+        assert!(
+            !mi_win_virtual_allocx(addr, 33554432, 33554432, (MEM_COMMIT | MEM_RESERVE).0)
+                .is_null()
+        );
+    }
+
+    #[test]
+    fn test_mi_os_page_size() {
+        let page_size = _mi_os_page_size();
+        println!("page size: {page_size}");
+    }
+
+    #[test]
+    fn test_memory_layout() {
+        assert_eq!(
+            size_of::<MEM_EXTENDED_PARAMETER>(),
+            size_of::<MiMemExtendedParameter>()
+        );
     }
 
     // #[test]
@@ -679,6 +748,25 @@ mod tests {
     //             stringify!(MiMemExtendedParameter),
     //             "::",
     //             stringify!(Arg)
+    //         )
+    //     );
+    // }
+    // #[test]
+    // fn bindgen_test_layout_MiMemExtendedParameter__bindgen_ty_1() {
+    //     assert_eq!(
+    //         ::std::mem::size_of::<MiMemExtendedParameterBindgenTy1>(),
+    //         8usize,
+    //         concat!(
+    //             "Size of: ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_1)
+    //         )
+    //     );
+    //     assert_eq!(
+    //         ::std::mem::align_of::<MiMemExtendedParameterBindgenTy1>(),
+    //         8usize,
+    //         concat!(
+    //             "Alignment of ",
+    //             stringify!(MiMemExtendedParameter__bindgen_ty_1)
     //         )
     //     );
     // }
