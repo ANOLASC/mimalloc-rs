@@ -295,7 +295,7 @@ fn _mi_heap_set_default_direct(heap: *mut MiHeap) {
     }
 }
 
-fn _mi_current_thread_count() -> usize {
+pub fn _mi_current_thread_count() -> usize {
     THREAD_COUNT.load(Ordering::Relaxed)
 }
 

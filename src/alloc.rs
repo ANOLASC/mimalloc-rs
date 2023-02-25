@@ -43,7 +43,7 @@ fn _mi_heap_malloc_zero_ex(
     if size <= MI_SMALL_SIZE_MAX {
         // fast path
         debug_assert!(huge_alignment == 0);
-        return mi_heap_malloc_small_zero(heap, size, zero);
+        mi_heap_malloc_small_zero(heap, size, zero)
     } else {
         // slow path
         // TODO To be implemented

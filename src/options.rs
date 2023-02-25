@@ -61,15 +61,16 @@ const MI_OPTION_LAST: usize = 3;
 //     // { 0,    UNINIT, MI_OPTION(destroy_on_exit)}     // release all OS memory on process exit; careful with dangling pointer or after-exit frees!
 //   };
 
-// fn  mi_option_get(option: MiOption)->i64 {
-//     // if option < 0 || option >= _mi_option_last {return 0;}
-//     let desc = &options[option];
-//     debug_assert!(desc->option == option);  // index should match the option
-//     if desc->init == UNINIT {
-//       mi_option_init(desc);
-//     }
-//     return desc->value;
-//   }
+pub fn mi_option_get(option: MiOption) -> i64 {
+    // if option < 0 || option >= _mi_option_last {return 0;}
+    // let desc = &options[option];
+    // debug_assert!(desc->option == option);  // index should match the option
+    // if desc->init == UNINIT {
+    //   mi_option_init(desc);
+    // }
+    // return desc->value;
+    0
+}
 
 pub fn mi_option_is_enabled(option: MiOption) -> bool {
     true

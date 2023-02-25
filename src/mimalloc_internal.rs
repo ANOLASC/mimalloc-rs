@@ -107,3 +107,33 @@ fn mi_page_block_size(page: *const MiPage) -> usize {
         // return psize;
     }
 }
+
+// -------------------------------------------------------------------
+// commit mask
+// -------------------------------------------------------------------
+
+// static inline void mi_commit_mask_create_empty(mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       cm->mask[i] = 0;
+//     }
+//   }
+
+//   static inline void mi_commit_mask_create_full(mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       cm->mask[i] = ~((size_t)0);
+//     }
+//   }
+
+//   static inline bool mi_commit_mask_is_empty(const mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       if (cm->mask[i] != 0) return false;
+//     }
+//     return true;
+//   }
+
+//   static inline bool mi_commit_mask_is_full(const mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       if (cm->mask[i] != ~((size_t)0)) return false;
+//     }
+//     return true;
+//   }
