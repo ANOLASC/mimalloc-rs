@@ -1,4 +1,7 @@
-use crate::mimalloc_types::{MiSegmentKind, MI_HUGE_BLOCK_SIZE, MI_SEGMENT_MASK};
+use crate::mimalloc_types::{
+    MiCommitMask, MiSegmentKind, MI_HUGE_BLOCK_SIZE, MI_SEGMENT_MASK, MI_SEGMENT_SIZE,
+    MI_SEGMENT_SLICE_SIZE, MI_SIZE_BITS,
+};
 use std::ffi::c_void;
 
 use crate::{
@@ -108,15 +111,35 @@ fn mi_page_block_size(page: *const MiPage) -> usize {
     }
 }
 
+// ------------------------------------------------------
+// A segment holds a commit mask where a bit is set if
+// the corresponding MI_COMMIT_SIZE area is committed.
+// The MI_COMMIT_SIZE must be a multiple of the slice
+// size. If it is equal we have the most fine grained
+// decommit (but setting it higher can be more efficient).
+// The MI_MINIMAL_COMMIT_SIZE is the minimal amount that will
+// be committed in one go which can be set higher than
+// MI_COMMIT_SIZE for efficiency (while the decommit mask
+// is still tracked in fine-grained MI_COMMIT_SIZE chunks)
+// ------------------------------------------------------
+
+const MI_MINIMAL_COMMIT_SIZE: usize = 16 * MI_SEGMENT_SLICE_SIZE; // 1MiB
+const MI_COMMIT_SIZE: usize = MI_SEGMENT_SLICE_SIZE; // 64KiB
+const MI_COMMIT_MASK_BITS: usize = MI_SEGMENT_SIZE / MI_COMMIT_SIZE;
+const MI_COMMIT_MASK_FIELD_BITS: usize = MI_SIZE_BITS;
+const MI_COMMIT_MASK_FIELD_COUNT: usize = MI_COMMIT_MASK_BITS / MI_COMMIT_MASK_FIELD_BITS;
+
 // -------------------------------------------------------------------
 // commit mask
 // -------------------------------------------------------------------
 
-// static inline void mi_commit_mask_create_empty(mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       cm->mask[i] = 0;
-//     }
-//   }
+pub fn mi_commit_mask_create_empty(cm: *mut MiCommitMask) {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            (*cm).mask[i] = 0;
+        }
+    }
+}
 
 //   static inline void mi_commit_mask_create_full(mi_commit_mask_t* cm) {
 //     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {

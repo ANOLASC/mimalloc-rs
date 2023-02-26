@@ -1,5 +1,6 @@
 use std::{ptr, sync::atomic::AtomicU32};
 
+use crate::mimalloc_internal::mi_commit_mask_create_empty;
 use crate::mimalloc_types::MiCommitMask;
 use crate::mimalloc_types::MiOption::MiOptionEagerCommitDelay;
 use crate::options::mi_option_is_enabled;
@@ -40,10 +41,33 @@ pub fn mi_segment_alloc(
         let is_zero = false;
     }
 
-    let commit_mask: MiCommitMask;
-    let decommit_mask: MiCommitMask;
-    // mi_commit_mask_create_empty(&commit_mask);
-    // mi_commit_mask_create_empty(&decommit_mask);
+    let mut commit_mask = MiCommitMask { mask: [0; 8] };
+    let mut decommit_mask = MiCommitMask { mask: [0; 8] };
+    mi_commit_mask_create_empty(&mut commit_mask);
+    mi_commit_mask_create_empty(&mut decommit_mask);
+
+    // Allocate the segment from the OS
+    let segment = mi_segment_os_alloc(
+        required,
+        page_alignment,
+        // eager_delay,
+        // req_arena_id,
+        // &segment_slices,
+        // &pre_size,
+        // &info_slices,
+        // &commit_mask,
+        // &decommit_mask,
+        // &is_zero,
+        // &commit,
+        // tld,
+        // os_tld,
+    );
+
+    if segment.is_null() {
+        return ptr::null_mut();
+    }
+
+    // zero the segment info? -- not always needed as it may be zero initialized from the OS
 
     ptr::null_mut()
 }

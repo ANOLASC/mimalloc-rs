@@ -29,14 +29,14 @@ pub type MiThreadId = SizeT;
 pub type MiSlice = MiPage;
 
 const MI_SEGMENT_SLICE_SHIFT: usize = 13 + MI_INTPTR_SHIFT; // 64KiB  (32KiB on 32-bit)
-const MI_SEGMENT_SLICE_SIZE: usize = 1 << MI_SEGMENT_SLICE_SHIFT;
+pub const MI_SEGMENT_SLICE_SIZE: usize = 1 << MI_SEGMENT_SLICE_SHIFT;
 
 #[cfg(target_pointer_width = "32")]
 const MI_SEGMENT_SHIFT: usize = 7 + MI_SEGMENT_SLICE_SHIFT;
 #[cfg(not(target_pointer_width = "32"))]
 const MI_SEGMENT_SHIFT: usize = 9 + MI_SEGMENT_SLICE_SHIFT;
 
-const MI_SEGMENT_SIZE: usize = 1 << MI_SEGMENT_SHIFT;
+pub const MI_SEGMENT_SIZE: usize = 1 << MI_SEGMENT_SHIFT;
 const MI_SLICES_PER_SEGMENT: usize = MI_SEGMENT_SIZE / MI_SEGMENT_SLICE_SIZE; // 1024
 
 pub type MiArenaIdT = ::std::os::raw::c_int;
@@ -45,6 +45,14 @@ pub const MI_SEGMENT_ALIGN: usize = MI_SEGMENT_SIZE;
 pub const MI_SEGMENT_MASK: usize = MI_SEGMENT_ALIGN - 1;
 // may change in other debug mode
 pub const MI_DEBUG_UNINIT: u8 = 0xD0;
+
+#[cfg(target_pointer_width = "32")]
+pub const MI_SIZE_SHIFT: usize = 2;
+#[cfg(target_pointer_width = "64")]
+pub const MI_SIZE_SHIFT: usize = 3;
+
+pub const MI_SIZE_SIZE: usize = 1 << MI_SIZE_SHIFT;
+pub const MI_SIZE_BITS: usize = MI_SIZE_SIZE * 8;
 
 pub const MI_KiB: u32 = 1024;
 pub const MI_MiB: u32 = MI_KiB * MI_KiB;
