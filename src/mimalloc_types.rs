@@ -61,6 +61,24 @@ pub const MI_GiB: u32 = MI_MiB * MI_KiB;
 // Used as a special value to encode block sizes in 32 bits.
 pub const MI_HUGE_BLOCK_SIZE: u32 = 2 * MI_GiB;
 
+// ------------------------------------------------------
+// A segment holds a commit mask where a bit is set if
+// the corresponding MI_COMMIT_SIZE area is committed.
+// The MI_COMMIT_SIZE must be a multiple of the slice
+// size. If it is equal we have the most fine grained
+// decommit (but setting it higher can be more efficient).
+// The MI_MINIMAL_COMMIT_SIZE is the minimal amount that will
+// be committed in one go which can be set higher than
+// MI_COMMIT_SIZE for efficiency (while the decommit mask
+// is still tracked in fine-grained MI_COMMIT_SIZE chunks)
+// ------------------------------------------------------
+
+pub const MI_MINIMAL_COMMIT_SIZE: usize = 16 * MI_SEGMENT_SLICE_SIZE; // 1MiB
+pub const MI_COMMIT_SIZE: usize = MI_SEGMENT_SLICE_SIZE; // 64KiB
+pub const MI_COMMIT_MASK_BITS: usize = MI_SEGMENT_SIZE / MI_COMMIT_SIZE;
+pub const MI_COMMIT_MASK_FIELD_BITS: usize = MI_SIZE_BITS;
+pub const MI_COMMIT_MASK_FIELD_COUNT: usize = MI_COMMIT_MASK_BITS / MI_COMMIT_MASK_FIELD_BITS;
+
 #[repr(C)]
 struct MiPadding {
     canary: u32, // encoded block value to check validity of the padding (in case of overflow)

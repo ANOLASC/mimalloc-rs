@@ -7,7 +7,7 @@ use memoffset::offset_of;
 
 use crate::mimalloc_internal::mi_commit_mask_create_empty;
 use crate::mimalloc_types::MiOption::MiOptionEagerCommitDelay;
-use crate::mimalloc_types::{MiCommitMask, MiSlice};
+use crate::mimalloc_types::{MiCommitMask, MiSlice, MI_COMMIT_MASK_FIELD_COUNT};
 use crate::options::mi_option_is_enabled;
 use crate::{
     init::_mi_current_thread_count,
@@ -96,7 +96,10 @@ pub fn mi_segment_alloc(
         if (*segment).allow_decommit {
             (*segment).decommit_expire = 0; // don't decommit just committed memory // _mi_clock_now() + mi_option_get(mi_option_decommit_delay);
             (*segment).decommit_mask = decommit_mask;
-            // debug_assert(mi_commit_mask_all_set(&segment).commit_mask, &(*segment).decommit_mask);
+            debug_assert!(mi_commit_mask_all_set(
+                &(*segment).commit_mask,
+                &(*segment).decommit_mask
+            ));
             // #if MI_DEBUG>2
             // let commit_needed = _mi_divide_up(info_slices * MI_SEGMENT_SLICE_SIZE, MI_COMMIT_SIZE);
             // let commit_needed_mask;
@@ -143,3 +146,134 @@ fn mi_segment_calculate_slices(
 ) -> usize {
     0
 }
+
+// -------------------------------------------------------------------
+// commit mask
+// -------------------------------------------------------------------
+
+fn mi_commit_mask_all_set(commit: *const MiCommitMask, cm: *const MiCommitMask) -> bool {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            if ((*commit).mask[i] & (*cm).mask[i]) != (*cm).mask[i] {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+//   static bool mi_commit_mask_any_set(const mi_commit_mask_t* commit, const mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       if ((commit->mask[i] & cm->mask[i]) != 0) return true;
+//     }
+//     return false;
+//   }
+
+//   static void mi_commit_mask_create_intersect(const mi_commit_mask_t* commit, const mi_commit_mask_t* cm, mi_commit_mask_t* res) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       res->mask[i] = (commit->mask[i] & cm->mask[i]);
+//     }
+//   }
+
+//   static void mi_commit_mask_clear(mi_commit_mask_t* res, const mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       res->mask[i] &= ~(cm->mask[i]);
+//     }
+//   }
+
+//   static void mi_commit_mask_set(mi_commit_mask_t* res, const mi_commit_mask_t* cm) {
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       res->mask[i] |= cm->mask[i];
+//     }
+//   }
+
+//   static void mi_commit_mask_create(size_t bitidx, size_t bitcount, mi_commit_mask_t* cm) {
+//     mi_assert_internal(bitidx < MI_COMMIT_MASK_BITS);
+//     mi_assert_internal((bitidx + bitcount) <= MI_COMMIT_MASK_BITS);
+//     if (bitcount == MI_COMMIT_MASK_BITS) {
+//       mi_assert_internal(bitidx==0);
+//       mi_commit_mask_create_full(cm);
+//     }
+//     else if (bitcount == 0) {
+//       mi_commit_mask_create_empty(cm);
+//     }
+//     else {
+//       mi_commit_mask_create_empty(cm);
+//       size_t i = bitidx / MI_COMMIT_MASK_FIELD_BITS;
+//       size_t ofs = bitidx % MI_COMMIT_MASK_FIELD_BITS;
+//       while (bitcount > 0) {
+//         mi_assert_internal(i < MI_COMMIT_MASK_FIELD_COUNT);
+//         size_t avail = MI_COMMIT_MASK_FIELD_BITS - ofs;
+//         size_t count = (bitcount > avail ? avail : bitcount);
+//         size_t mask = (count >= MI_COMMIT_MASK_FIELD_BITS ? ~((size_t)0) : (((size_t)1 << count) - 1) << ofs);
+//         cm->mask[i] = mask;
+//         bitcount -= count;
+//         ofs = 0;
+//         i++;
+//       }
+//     }
+//   }
+
+//   size_t _mi_commit_mask_committed_size(const mi_commit_mask_t* cm, size_t total) {
+//     mi_assert_internal((total%MI_COMMIT_MASK_BITS)==0);
+//     size_t count = 0;
+//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
+//       size_t mask = cm->mask[i];
+//       if (~mask == 0) {
+//         count += MI_COMMIT_MASK_FIELD_BITS;
+//       }
+//       else {
+//         for (; mask != 0; mask >>= 1) {  // todo: use popcount
+//           if ((mask&1)!=0) count++;
+//         }
+//       }
+//     }
+//     // we use total since for huge segments each commit bit may represent a larger size
+//     return ((total / MI_COMMIT_MASK_BITS) * count);
+//   }
+
+//   size_t _mi_commit_mask_next_run(const mi_commit_mask_t* cm, size_t* idx) {
+//     size_t i = (*idx) / MI_COMMIT_MASK_FIELD_BITS;
+//     size_t ofs = (*idx) % MI_COMMIT_MASK_FIELD_BITS;
+//     size_t mask = 0;
+//     // find first ones
+//     while (i < MI_COMMIT_MASK_FIELD_COUNT) {
+//       mask = cm->mask[i];
+//       mask >>= ofs;
+//       if (mask != 0) {
+//         while ((mask&1) == 0) {
+//           mask >>= 1;
+//           ofs++;
+//         }
+//         break;
+//       }
+//       i++;
+//       ofs = 0;
+//     }
+//     if (i >= MI_COMMIT_MASK_FIELD_COUNT) {
+//       // not found
+//       *idx = MI_COMMIT_MASK_BITS;
+//       return 0;
+//     }
+//     else {
+//       // found, count ones
+//       size_t count = 0;
+//       *idx = (i*MI_COMMIT_MASK_FIELD_BITS) + ofs;
+//       do {
+//         mi_assert_internal(ofs < MI_COMMIT_MASK_FIELD_BITS && (mask&1) == 1);
+//         do {
+//           count++;
+//           mask >>= 1;
+//         } while ((mask&1) == 1);
+//         if ((((*idx + count) % MI_COMMIT_MASK_FIELD_BITS) == 0)) {
+//           i++;
+//           if (i >= MI_COMMIT_MASK_FIELD_COUNT) break;
+//           mask = cm->mask[i];
+//           ofs = 0;
+//         }
+//       } while ((mask&1) == 1);
+//       mi_assert_internal(count > 0);
+//       return count;
+//     }
+//   }
