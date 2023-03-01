@@ -141,22 +141,32 @@ pub fn mi_commit_mask_create_empty(cm: *mut MiCommitMask) {
     }
 }
 
-//   static inline void mi_commit_mask_create_full(mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       cm->mask[i] = ~((size_t)0);
-//     }
-//   }
+pub fn mi_commit_mask_create_full(cm: *mut MiCommitMask) {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            (*cm).mask[i] = !0;
+        }
+    }
+}
 
-//   static inline bool mi_commit_mask_is_empty(const mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       if (cm->mask[i] != 0) return false;
-//     }
-//     return true;
-//   }
+fn mi_commit_mask_is_empty(cm: *const MiCommitMask) -> bool {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            if (*cm).mask[i] != 0 {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
-//   static inline bool mi_commit_mask_is_full(const mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       if (cm->mask[i] != ~((size_t)0)) return false;
-//     }
-//     return true;
-//   }
+fn mi_commit_mask_is_full(cm: *const MiCommitMask) -> bool {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            if (*cm).mask[i] != !0 {
+                return false;
+            }
+        }
+    }
+    return true;
+}

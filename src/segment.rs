@@ -5,9 +5,12 @@ use std::{ptr, sync::atomic::AtomicU32};
 use libc::{c_void, memset};
 use memoffset::offset_of;
 
-use crate::mimalloc_internal::mi_commit_mask_create_empty;
+use crate::mimalloc_internal::{mi_commit_mask_create_empty, mi_commit_mask_create_full};
 use crate::mimalloc_types::MiOption::MiOptionEagerCommitDelay;
-use crate::mimalloc_types::{MiCommitMask, MiSlice, MI_COMMIT_MASK_FIELD_COUNT};
+use crate::mimalloc_types::{
+    MiCommitMask, MiSlice, MI_COMMIT_MASK_BITS, MI_COMMIT_MASK_FIELD_BITS,
+    MI_COMMIT_MASK_FIELD_COUNT,
+};
 use crate::options::mi_option_is_enabled;
 use crate::{
     init::_mi_current_thread_count,
@@ -163,63 +166,82 @@ fn mi_commit_mask_all_set(commit: *const MiCommitMask, cm: *const MiCommitMask) 
     true
 }
 
-//   static bool mi_commit_mask_any_set(const mi_commit_mask_t* commit, const mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       if ((commit->mask[i] & cm->mask[i]) != 0) return true;
-//     }
-//     return false;
-//   }
+fn mi_commit_mask_any_set(commit: *const MiCommitMask, cm: *const MiCommitMask) -> bool {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            if ((*commit).mask[i] & (*cm).mask[i]) != 0 {
+                return true;
+            }
+        }
+    }
 
-//   static void mi_commit_mask_create_intersect(const mi_commit_mask_t* commit, const mi_commit_mask_t* cm, mi_commit_mask_t* res) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       res->mask[i] = (commit->mask[i] & cm->mask[i]);
-//     }
-//   }
+    false
+}
 
-//   static void mi_commit_mask_clear(mi_commit_mask_t* res, const mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       res->mask[i] &= ~(cm->mask[i]);
-//     }
-//   }
+fn mi_commit_mask_create_intersect(
+    commit: *const MiCommitMask,
+    cm: *const MiCommitMask,
+    res: *mut MiCommitMask,
+) {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            (*res).mask[i] = (*commit).mask[i] & (*cm).mask[i];
+        }
+    }
+}
 
-//   static void mi_commit_mask_set(mi_commit_mask_t* res, const mi_commit_mask_t* cm) {
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       res->mask[i] |= cm->mask[i];
-//     }
-//   }
+fn mi_commit_mask_clear(res: *mut MiCommitMask, cm: *const MiCommitMask) {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            (*res).mask[i] &= !((*cm).mask[i]);
+        }
+    }
+}
 
-//   static void mi_commit_mask_create(size_t bitidx, size_t bitcount, mi_commit_mask_t* cm) {
-//     mi_assert_internal(bitidx < MI_COMMIT_MASK_BITS);
-//     mi_assert_internal((bitidx + bitcount) <= MI_COMMIT_MASK_BITS);
-//     if (bitcount == MI_COMMIT_MASK_BITS) {
-//       mi_assert_internal(bitidx==0);
-//       mi_commit_mask_create_full(cm);
-//     }
-//     else if (bitcount == 0) {
-//       mi_commit_mask_create_empty(cm);
-//     }
-//     else {
-//       mi_commit_mask_create_empty(cm);
-//       size_t i = bitidx / MI_COMMIT_MASK_FIELD_BITS;
-//       size_t ofs = bitidx % MI_COMMIT_MASK_FIELD_BITS;
-//       while (bitcount > 0) {
-//         mi_assert_internal(i < MI_COMMIT_MASK_FIELD_COUNT);
-//         size_t avail = MI_COMMIT_MASK_FIELD_BITS - ofs;
-//         size_t count = (bitcount > avail ? avail : bitcount);
-//         size_t mask = (count >= MI_COMMIT_MASK_FIELD_BITS ? ~((size_t)0) : (((size_t)1 << count) - 1) << ofs);
-//         cm->mask[i] = mask;
-//         bitcount -= count;
-//         ofs = 0;
-//         i++;
-//       }
-//     }
-//   }
+fn mi_commit_mask_set(res: *mut MiCommitMask, cm: *const MiCommitMask) {
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        unsafe {
+            (*res).mask[i] |= (*cm).mask[i];
+        }
+    }
+}
 
-//   size_t _mi_commit_mask_committed_size(const mi_commit_mask_t* cm, size_t total) {
-//     mi_assert_internal((total%MI_COMMIT_MASK_BITS)==0);
+fn mi_commit_mask_create(bitidx: usize, mut bitcount: usize, cm: *mut MiCommitMask) {
+    debug_assert!(bitidx < MI_COMMIT_MASK_BITS);
+    debug_assert!((bitidx + bitcount) <= MI_COMMIT_MASK_BITS);
+    if bitcount == MI_COMMIT_MASK_BITS {
+        debug_assert!(bitidx == 0);
+        mi_commit_mask_create_full(cm);
+    } else if bitcount == 0 {
+        mi_commit_mask_create_empty(cm);
+    } else {
+        mi_commit_mask_create_empty(cm);
+        let mut i = bitidx / MI_COMMIT_MASK_FIELD_BITS;
+        let mut ofs = bitidx % MI_COMMIT_MASK_FIELD_BITS;
+        while bitcount > 0 {
+            debug_assert!(i < MI_COMMIT_MASK_FIELD_COUNT);
+            let avail = MI_COMMIT_MASK_FIELD_BITS - ofs;
+            let count = if bitcount > avail { avail } else { bitcount };
+            let mask = if count >= MI_COMMIT_MASK_FIELD_BITS {
+                !0
+            } else {
+                ((1 << count) - 1) << ofs
+            };
+            unsafe {
+                (*cm).mask[i] = mask;
+            }
+            bitcount -= count;
+            ofs = 0;
+            i += 1;
+        }
+    }
+}
+
+//   size_t _mi_commit_mask_committed_size(cm: *const MiCommitMask, size_t total) {
+//     debug_assert!((total%MI_COMMIT_MASK_BITS)==0);
 //     size_t count = 0;
-//     for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
-//       size_t mask = cm->mask[i];
+//     for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+//       size_t mask = (*cm).mask[i];
 //       if (~mask == 0) {
 //         count += MI_COMMIT_MASK_FIELD_BITS;
 //       }
@@ -233,13 +255,13 @@ fn mi_commit_mask_all_set(commit: *const MiCommitMask, cm: *const MiCommitMask) 
 //     return ((total / MI_COMMIT_MASK_BITS) * count);
 //   }
 
-//   size_t _mi_commit_mask_next_run(const mi_commit_mask_t* cm, size_t* idx) {
+//   size_t _mi_commit_mask_next_run(cm: *const MiCommitMask, size_t* idx) {
 //     size_t i = (*idx) / MI_COMMIT_MASK_FIELD_BITS;
 //     size_t ofs = (*idx) % MI_COMMIT_MASK_FIELD_BITS;
 //     size_t mask = 0;
 //     // find first ones
 //     while (i < MI_COMMIT_MASK_FIELD_COUNT) {
-//       mask = cm->mask[i];
+//       mask = (*cm).mask[i];
 //       mask >>= ofs;
 //       if (mask != 0) {
 //         while ((mask&1) == 0) {
@@ -261,7 +283,7 @@ fn mi_commit_mask_all_set(commit: *const MiCommitMask, cm: *const MiCommitMask) 
 //       size_t count = 0;
 //       *idx = (i*MI_COMMIT_MASK_FIELD_BITS) + ofs;
 //       do {
-//         mi_assert_internal(ofs < MI_COMMIT_MASK_FIELD_BITS && (mask&1) == 1);
+//         debug_assert!(ofs < MI_COMMIT_MASK_FIELD_BITS && (mask&1) == 1);
 //         do {
 //           count++;
 //           mask >>= 1;
@@ -269,11 +291,11 @@ fn mi_commit_mask_all_set(commit: *const MiCommitMask, cm: *const MiCommitMask) 
 //         if ((((*idx + count) % MI_COMMIT_MASK_FIELD_BITS) == 0)) {
 //           i++;
 //           if (i >= MI_COMMIT_MASK_FIELD_COUNT) break;
-//           mask = cm->mask[i];
+//           mask = (*cm).mask[i];
 //           ofs = 0;
 //         }
 //       } while ((mask&1) == 1);
-//       mi_assert_internal(count > 0);
+//       debug_assert!(count > 0);
 //       return count;
 //     }
 //   }
