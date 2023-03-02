@@ -237,65 +237,84 @@ fn mi_commit_mask_create(bitidx: usize, mut bitcount: usize, cm: *mut MiCommitMa
     }
 }
 
-//   size_t _mi_commit_mask_committed_size(cm: *const MiCommitMask, size_t total) {
-//     debug_assert!((total%MI_COMMIT_MASK_BITS)==0);
-//     size_t count = 0;
-//     for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
-//       size_t mask = (*cm).mask[i];
-//       if (~mask == 0) {
-//         count += MI_COMMIT_MASK_FIELD_BITS;
-//       }
-//       else {
-//         for (; mask != 0; mask >>= 1) {  // todo: use popcount
-//           if ((mask&1)!=0) count++;
-//         }
-//       }
-//     }
-//     // we use total since for huge segments each commit bit may represent a larger size
-//     return ((total / MI_COMMIT_MASK_BITS) * count);
-//   }
+fn _mi_commit_mask_committed_size(cm: *const MiCommitMask, total: usize) -> usize {
+    debug_assert!((total % MI_COMMIT_MASK_BITS) == 0);
+    let mut count = 0;
+    for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
+        let mut mask = unsafe { (*cm).mask[i] };
+        if !mask == 0 {
+            count += MI_COMMIT_MASK_FIELD_BITS;
+        } else {
+            while mask != 0 {
+                if (mask & 1) != 0 {
+                    count += 1;
+                }
 
-//   size_t _mi_commit_mask_next_run(cm: *const MiCommitMask, size_t* idx) {
-//     size_t i = (*idx) / MI_COMMIT_MASK_FIELD_BITS;
-//     size_t ofs = (*idx) % MI_COMMIT_MASK_FIELD_BITS;
-//     size_t mask = 0;
-//     // find first ones
-//     while (i < MI_COMMIT_MASK_FIELD_COUNT) {
-//       mask = (*cm).mask[i];
-//       mask >>= ofs;
-//       if (mask != 0) {
-//         while ((mask&1) == 0) {
-//           mask >>= 1;
-//           ofs++;
-//         }
-//         break;
-//       }
-//       i++;
-//       ofs = 0;
-//     }
-//     if (i >= MI_COMMIT_MASK_FIELD_COUNT) {
-//       // not found
-//       *idx = MI_COMMIT_MASK_BITS;
-//       return 0;
-//     }
-//     else {
-//       // found, count ones
-//       size_t count = 0;
-//       *idx = (i*MI_COMMIT_MASK_FIELD_BITS) + ofs;
-//       do {
-//         debug_assert!(ofs < MI_COMMIT_MASK_FIELD_BITS && (mask&1) == 1);
-//         do {
-//           count++;
-//           mask >>= 1;
-//         } while ((mask&1) == 1);
-//         if ((((*idx + count) % MI_COMMIT_MASK_FIELD_BITS) == 0)) {
-//           i++;
-//           if (i >= MI_COMMIT_MASK_FIELD_COUNT) break;
-//           mask = (*cm).mask[i];
-//           ofs = 0;
-//         }
-//       } while ((mask&1) == 1);
-//       debug_assert!(count > 0);
-//       return count;
-//     }
-//   }
+                mask >>= 1;
+            }
+
+            // for (; mask != 0; mask >>= 1) {  // todo: use popcount
+            //   if ((mask&1)!=0) count++;
+            // }
+        }
+    }
+    // we use total since for huge segments each commit bit may represent a larger size
+    (total / MI_COMMIT_MASK_BITS) * count
+}
+
+fn _mi_commit_mask_next_run(cm: *const MiCommitMask, idx: *mut usize) -> usize {
+    let mut i = unsafe { (*idx) / MI_COMMIT_MASK_FIELD_BITS };
+    let mut ofs = unsafe { (*idx) % MI_COMMIT_MASK_FIELD_BITS };
+    let mut mask = 0;
+    // find first ones
+    while i < MI_COMMIT_MASK_FIELD_COUNT {
+        mask = unsafe { (*cm).mask[i] };
+        mask >>= ofs;
+        if mask != 0 {
+            while (mask & 1) == 0 {
+                mask >>= 1;
+                ofs += 1;
+            }
+            break;
+        }
+        i += 1;
+        ofs = 0;
+    }
+    if i >= MI_COMMIT_MASK_FIELD_COUNT {
+        // not found
+        unsafe { *idx = MI_COMMIT_MASK_BITS };
+        0
+    } else {
+        // found, count ones
+        let mut count = 0;
+        unsafe {
+            *idx = (i * MI_COMMIT_MASK_FIELD_BITS) + ofs;
+        }
+
+        loop {
+            debug_assert!(ofs < MI_COMMIT_MASK_FIELD_BITS && (mask & 1) == 1);
+            loop {
+                count += 1;
+                mask >>= 1;
+                if (mask & 1) != 1 {
+                    break;
+                }
+            }
+            if ((unsafe { *idx } + count) % MI_COMMIT_MASK_FIELD_BITS) == 0 {
+                i += 1;
+                if i >= MI_COMMIT_MASK_FIELD_COUNT {
+                    break;
+                }
+                mask = unsafe { (*cm).mask[i] };
+                ofs = 0;
+            }
+
+            if (mask & 1) != 1 {
+                break;
+            }
+        }
+
+        debug_assert!(count > 0);
+        count
+    }
+}
