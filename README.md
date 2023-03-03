@@ -5,7 +5,7 @@
 ## ToDo List
 
 - [ ] Translation from C to Rust
-- [ ] Rewrite in Rust way
+- [ ] Rewrite in Rust style
 - [ ] Benchmark
 - [ ] Logging
 - [ ] Full Test

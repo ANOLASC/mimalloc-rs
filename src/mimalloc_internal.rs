@@ -170,3 +170,33 @@ fn mi_commit_mask_is_full(cm: *const MiCommitMask) -> bool {
     }
     return true;
 }
+
+// Align downwards
+pub fn _mi_align_down(sz: usize, alignment: usize) -> usize {
+    debug_assert!(alignment != 0);
+    let mask = alignment - 1;
+    if (alignment & mask) == 0 {
+        // power of two?
+        return sz & !mask;
+    } else {
+        return (sz / alignment) * alignment;
+    }
+}
+
+// Divide upwards: `s <= _mi_divide_up(s,d)*d < s+d`.
+pub fn _mi_divide_up(size: usize, divider: usize) -> usize {
+    debug_assert!(divider != 0);
+    if divider == 0 {
+        size
+    } else {
+        (size + divider - 1) / divider
+    }
+}
+
+// Is memory zero initialized?
+//   pub fn mi_mem_is_zero( p: *const c_void,  size: usize) -> bool{
+//     for i in 0..size {
+//         if (((uint8_t*) p )[i] != 0) {return false;}
+//     }
+//     return true;
+//   }

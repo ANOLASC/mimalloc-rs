@@ -5,11 +5,13 @@ use std::{ptr, sync::atomic::AtomicU32};
 use libc::{c_void, memset};
 use memoffset::offset_of;
 
-use crate::mimalloc_internal::{mi_commit_mask_create_empty, mi_commit_mask_create_full};
+use crate::mimalloc_internal::{
+    _mi_divide_up, mi_commit_mask_create_empty, mi_commit_mask_create_full,
+};
 use crate::mimalloc_types::MiOption::MiOptionEagerCommitDelay;
 use crate::mimalloc_types::{
     MiCommitMask, MiSlice, MI_COMMIT_MASK_BITS, MI_COMMIT_MASK_FIELD_BITS,
-    MI_COMMIT_MASK_FIELD_COUNT,
+    MI_COMMIT_MASK_FIELD_COUNT, MI_COMMIT_SIZE, MI_SEGMENT_SLICE_SIZE,
 };
 use crate::options::mi_option_is_enabled;
 use crate::{
@@ -104,13 +106,17 @@ pub fn mi_segment_alloc(
                 &(*segment).decommit_mask
             ));
             // #if MI_DEBUG>2
-            // let commit_needed = _mi_divide_up(info_slices * MI_SEGMENT_SLICE_SIZE, MI_COMMIT_SIZE);
-            // let commit_needed_mask;
-            // mi_commit_mask_create(0, commit_needed, &commit_needed_mask);
-            // debug_assert(
-            //     !mi_commit_mask_any_set(&segment).decommit_mask,
-            //     &commit_needed_mask,
-            // );
+            if cfg!(Debug) {
+                let commit_needed =
+                    _mi_divide_up(info_slices * MI_SEGMENT_SLICE_SIZE, MI_COMMIT_SIZE);
+                let mut commit_needed_mask = MiCommitMask { mask: [0; 8] };
+                mi_commit_mask_create(0, commit_needed, &mut commit_needed_mask);
+                debug_assert!(mi_commit_mask_any_set(
+                    &(*segment).decommit_mask,
+                    &commit_needed_mask,
+                ));
+            }
+
             // #endif
         }
     }
