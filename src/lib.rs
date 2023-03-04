@@ -9,4 +9,5 @@ mod os;
 mod page;
 mod random;
 mod segment;
+mod segment_cache;
 mod tests;

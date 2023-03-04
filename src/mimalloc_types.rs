@@ -58,6 +58,8 @@ pub const MI_KiB: u32 = 1024;
 pub const MI_MiB: u32 = MI_KiB * MI_KiB;
 pub const MI_GiB: u32 = MI_MiB * MI_KiB;
 
+pub const MI_SECURE: u8 = 0;
+
 // Used as a special value to encode block sizes in 32 bits.
 pub const MI_HUGE_BLOCK_SIZE: u32 = 2 * MI_GiB;
 
@@ -657,19 +659,11 @@ impl Default for MiTLD {
 }
 
 #[repr(C)]
+#[derive(Default)]
 // note: in x64 in release build `sizeof(mi_thread_data_t)` is under 4KiB (= OS page size).
 pub struct MiThreadData {
     pub heap: MiHeap, // must come first due to cast in `_mi_heap_done`
     pub tld: MiTLD,
-}
-
-impl Default for MiThreadData {
-    fn default() -> Self {
-        Self {
-            heap: Default::default(),
-            tld: Default::default(),
-        }
-    }
 }
 
 impl MiThreadData {
@@ -704,7 +698,7 @@ pub enum MiOption {
     // mi_option_max_errors,
     // mi_option_max_warnings,
     // mi_option_max_segment_reclaim,
-    // mi_option_allow_decommit,
+    MiOptionAllowDecommit,
     // mi_option_segment_decommit_delay,
     // mi_option_decommit_extend_delay,
     // mi_option_destroy_on_exit,

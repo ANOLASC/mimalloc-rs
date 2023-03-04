@@ -218,7 +218,7 @@ fn _mi_os_page_size() -> usize {
 }
 
 // Align upwards
-fn _mi_align_up(sz: usize, alignment: usize) -> usize {
+pub fn _mi_align_up(sz: usize, alignment: usize) -> usize {
     debug_assert!(alignment != 0);
     let mask = alignment - 1;
     if (alignment & mask) == 0 {
@@ -304,7 +304,7 @@ fn mi_os_mem_alloc_aligned(
     p
 }
 
-fn _mi_os_commit(
+pub fn _mi_os_commit(
     addr: *mut c_void,
     size: usize,
     is_zero: *mut bool, /*, mi_stats_t* tld_stats */

@@ -149,7 +149,7 @@ pub fn mi_commit_mask_create_full(cm: *mut MiCommitMask) {
     }
 }
 
-fn mi_commit_mask_is_empty(cm: *const MiCommitMask) -> bool {
+pub fn mi_commit_mask_is_empty(cm: *const MiCommitMask) -> bool {
     for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
         unsafe {
             if (*cm).mask[i] != 0 {
@@ -160,7 +160,7 @@ fn mi_commit_mask_is_empty(cm: *const MiCommitMask) -> bool {
     return true;
 }
 
-fn mi_commit_mask_is_full(cm: *const MiCommitMask) -> bool {
+pub fn mi_commit_mask_is_full(cm: *const MiCommitMask) -> bool {
     for i in 0..MI_COMMIT_MASK_FIELD_COUNT {
         unsafe {
             if (*cm).mask[i] != !0 {

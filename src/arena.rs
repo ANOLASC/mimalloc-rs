@@ -1,9 +1,18 @@
 use std::{ffi::c_void, ptr};
 
-fn _mi_arena_alloc_aligned(
+use crate::mimalloc_types::{MiArenaIdT, MiOsTLD};
+
+pub fn _mi_arena_alloc_aligned(
     size: usize,
-    alignment: usize, /* , size_t align_offset, bool* commit, bool* large, bool* is_pinned, bool* is_zero,
-                      mi_arena_id_t req_arena_id, size_t* memid, mi_os_tld_t* tld*/
+    alignment: usize,
+    align_offset: usize,
+    commit: *mut bool,
+    large: *mut bool,
+    is_pinned: *mut bool,
+    is_zero: *mut bool,
+    req_arena_id: MiArenaIdT,
+    memid: *mut usize,
+    tld: *mut MiOsTLD,
 ) -> *mut c_void {
     ptr::null_mut()
 }
