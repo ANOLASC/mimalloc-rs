@@ -12,8 +12,8 @@ use crate::mimalloc_internal::{
 use crate::mimalloc_types::MiOption::{self, MiOptionEagerCommitDelay};
 use crate::mimalloc_types::{
     MiCommitMask, MiSlice, MI_COMMIT_MASK_BITS, MI_COMMIT_MASK_FIELD_BITS,
-    MI_COMMIT_MASK_FIELD_COUNT, MI_COMMIT_SIZE, MI_SECURE, MI_SEGMENT_ALIGN, MI_SEGMENT_SIZE,
-    MI_SEGMENT_SLICE_SIZE,
+    MI_COMMIT_MASK_FIELD_COUNT, MI_COMMIT_SIZE, MI_HUGE_BLOCK_SIZE, MI_LARGE_OBJ_SIZE_MAX,
+    MI_SECURE, MI_SEGMENT_ALIGN, MI_SEGMENT_SIZE, MI_SEGMENT_SLICE_SIZE,
 };
 use crate::options::mi_option_is_enabled;
 use crate::os::{_mi_align_up, _mi_os_commit};
@@ -248,17 +248,82 @@ fn mi_segment_os_alloc(
     return segment;
 }
 
+fn mi_segment_try_reclaim(
+    heap: *mut MiHeap,
+    needed_slices: usize,
+    block_size: usize,
+    reclaimed: *mut bool,
+    tld: *mut MiSegmentsTLD,
+) -> *mut MiSegment {
+    //   unsafe { *reclaimed = false };
+    //   let segment;
+    //   let max_tries = mi_option_get_clamp(mi_option_max_segment_reclaim, 8, 1024);     // limit the work to bound allocation times
+    //   while ((max_tries-- > 0) && (!(segment = mi_abandoned_pop()).is_null())) {
+    //     segment->abandoned_visits++;
+    //     // todo: an arena exclusive heap will potentially visit many abandoned unsuitable segments
+    //     // and push them into the visited list and use many tries. Perhaps we can skip non-suitable ones in a better way?
+    //     bool is_suitable = _mi_heap_memid_is_suitable(heap, segment->memid);
+    //     bool has_page = mi_segment_check_free(segment,needed_slices,block_size,tld); // try to free up pages (due to concurrent frees)
+    //     if (segment->used == 0) {
+    //       // free the segment (by forced reclaim) to make it available to other threads.
+    //       // note1: we prefer to free a segment as that might lead to reclaiming another
+    //       // segment that is still partially used.
+    //       // note2: we could in principle optimize this by skipping reclaim and directly
+    //       // freeing but that would violate some invariants temporarily)
+    //       mi_segment_reclaim(segment, heap, 0, NULL, tld);
+    //     }
+    //     else if (has_page && is_suitable) {
+    //       // found a large enough free span, or a page of the right block_size with free space
+    //       // we return the result of reclaim (which is usually `segment`) as it might free
+    //       // the segment due to concurrent frees (in which case `NULL` is returned).
+    //       return mi_segment_reclaim(segment, heap, block_size, reclaimed, tld);
+    //     }
+    //     else if (segment->abandoned_visits > 3 && is_suitable) {
+    //       // always reclaim on 3rd visit to limit the abandoned queue length.
+    //       mi_segment_reclaim(segment, heap, 0, NULL, tld);
+    //     }
+    //     else {
+    //       // otherwise, push on the visited list so it gets not looked at too quickly again
+    //       mi_segment_delayed_decommit(segment, true /* force? */, tld->stats); // forced decommit if needed as we may not visit soon again
+    //       mi_abandoned_visited_push(segment);
+    //     }
+    //   }
+    ptr::null_mut()
+}
+
 /* -----------------------------------------------------------
    Reclaim or allocate
 ----------------------------------------------------------- */
 fn mi_segment_reclaim_or_alloc(
-    heap: MiHeap,
+    heap: *mut MiHeap,
     needed_slices: usize,
     block_size: usize,
     tld: *mut MiSegmentsTLD,
     os_tld: *mut MiOsTLD,
 ) -> *mut MiSegment {
-    ptr::null_mut()
+    debug_assert!(block_size < MI_HUGE_BLOCK_SIZE);
+    debug_assert!(block_size <= MI_LARGE_OBJ_SIZE_MAX);
+
+    // 1. try to reclaim an abandoned segment
+    let mut reclaimed = false;
+    let segment = mi_segment_try_reclaim(heap, needed_slices, block_size, &mut reclaimed, tld);
+    if reclaimed {
+        // reclaimed the right page right into the heap
+        debug_assert!(!segment.is_null());
+        return ptr::null_mut(); // pretend out-of-memory as the page will be in the page queue of the heap with available blocks
+    } else if !segment.is_null() {
+        // reclaimed a segment with a large enough empty span in it
+        return segment;
+    }
+    // 2. otherwise allocate a fresh segment
+    mi_segment_alloc(
+        0,
+        0,
+        unsafe { (*heap).arena_id },
+        tld,
+        os_tld,
+        ptr::null_mut(),
+    )
 }
 
 fn mi_segment_calculate_slices(

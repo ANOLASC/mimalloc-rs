@@ -39,6 +39,18 @@ const MI_SEGMENT_SHIFT: usize = 9 + MI_SEGMENT_SLICE_SHIFT;
 pub const MI_SEGMENT_SIZE: usize = 1 << MI_SEGMENT_SHIFT;
 const MI_SLICES_PER_SEGMENT: usize = MI_SEGMENT_SIZE / MI_SEGMENT_SLICE_SIZE; // 1024
 
+pub const MI_SMALL_PAGE_SHIFT: usize = MI_SEGMENT_SLICE_SHIFT; // 64KiB
+pub const MI_MEDIUM_PAGE_SHIFT: usize = 3 + MI_SMALL_PAGE_SHIFT; // 512KiB
+
+pub const MI_SMALL_PAGE_SIZE: usize = 1 << MI_SMALL_PAGE_SHIFT;
+pub const MI_MEDIUM_PAGE_SIZE: usize = 1 << MI_MEDIUM_PAGE_SHIFT;
+
+pub const MI_SMALL_OBJ_SIZE_MAX: usize = MI_SMALL_PAGE_SIZE / 4; // 8KiB on 64-bit
+pub const MI_MEDIUM_OBJ_SIZE_MAX: usize = MI_MEDIUM_PAGE_SIZE / 4; // 128KiB on 64-bit
+pub const MI_MEDIUM_OBJ_WSIZE_MAX: usize = MI_MEDIUM_OBJ_SIZE_MAX / MI_INTPTR_SIZE;
+pub const MI_LARGE_OBJ_SIZE_MAX: usize = MI_SEGMENT_SIZE / 2; // 32MiB on 64-bit
+pub const MI_LARGE_OBJ_WSIZE_MAX: usize = MI_LARGE_OBJ_SIZE_MAX / MI_INTPTR_SIZE;
+
 pub type MiArenaIdT = ::std::os::raw::c_int;
 
 pub const MI_SEGMENT_ALIGN: usize = MI_SEGMENT_SIZE;
@@ -61,7 +73,7 @@ pub const MI_GiB: u32 = MI_MiB * MI_KiB;
 pub const MI_SECURE: u8 = 0;
 
 // Used as a special value to encode block sizes in 32 bits.
-pub const MI_HUGE_BLOCK_SIZE: u32 = 2 * MI_GiB;
+pub const MI_HUGE_BLOCK_SIZE: usize = 2 * MI_GiB as usize;
 
 // ------------------------------------------------------
 // A segment holds a commit mask where a bit is set if

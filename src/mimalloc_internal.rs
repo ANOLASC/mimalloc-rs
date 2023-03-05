@@ -100,7 +100,7 @@ pub fn mi_page_usable_block_size(page: *const MiPage) -> usize {
 fn mi_page_block_size(page: *const MiPage) -> usize {
     let bsize = unsafe { (*page).xblock_size };
     debug_assert!(bsize > 0);
-    if bsize < MI_HUGE_BLOCK_SIZE {
+    if (bsize as usize) < MI_HUGE_BLOCK_SIZE {
         bsize as usize
     } else {
         // TODO
