@@ -709,7 +709,7 @@ pub enum MiOption {
     // mi_option_os_tag,
     // mi_option_max_errors,
     // mi_option_max_warnings,
-    // mi_option_max_segment_reclaim,
+    MiOptionMaxSegmentReclaim,
     MiOptionAllowDecommit,
     // mi_option_segment_decommit_delay,
     // mi_option_decommit_extend_delay,

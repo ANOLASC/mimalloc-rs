@@ -15,8 +15,9 @@ use crate::mimalloc_types::{
     MI_COMMIT_MASK_FIELD_COUNT, MI_COMMIT_SIZE, MI_HUGE_BLOCK_SIZE, MI_LARGE_OBJ_SIZE_MAX,
     MI_SECURE, MI_SEGMENT_ALIGN, MI_SEGMENT_SIZE, MI_SEGMENT_SLICE_SIZE,
 };
-use crate::options::mi_option_is_enabled;
+use crate::options::{mi_option_get_clamp, mi_option_is_enabled};
 use crate::os::{_mi_align_up, _mi_os_commit};
+use crate::segment::MiOption::MiOptionMaxSegmentReclaim;
 use crate::segment_cache::{_mi_segment_cache_pop, _mi_segment_map_allocated_at};
 use crate::{
     init::_mi_current_thread_count,
@@ -255,22 +256,22 @@ fn mi_segment_try_reclaim(
     reclaimed: *mut bool,
     tld: *mut MiSegmentsTLD,
 ) -> *mut MiSegment {
-    //   unsafe { *reclaimed = false };
+    //   unsafe { *reclaimed = false ;
     //   let segment;
-    //   let max_tries = mi_option_get_clamp(mi_option_max_segment_reclaim, 8, 1024);     // limit the work to bound allocation times
+    //   let mut max_tries = mi_option_get_clamp(MiOptionMaxSegmentReclaim, 8, 1024);     // limit the work to bound allocation times
     //   while ((max_tries-- > 0) && (!(segment = mi_abandoned_pop()).is_null())) {
-    //     segment->abandoned_visits++;
+    //     (*segment).abandoned_visits += 1;
     //     // todo: an arena exclusive heap will potentially visit many abandoned unsuitable segments
     //     // and push them into the visited list and use many tries. Perhaps we can skip non-suitable ones in a better way?
-    //     bool is_suitable = _mi_heap_memid_is_suitable(heap, segment->memid);
-    //     bool has_page = mi_segment_check_free(segment,needed_slices,block_size,tld); // try to free up pages (due to concurrent frees)
-    //     if (segment->used == 0) {
+    //     let is_suitable = _mi_heap_memid_is_suitable(heap, (*segment).memid);
+    //     let has_page = mi_segment_check_free(segment,needed_slices,block_size,tld); // try to free up pages (due to concurrent frees)
+    //     if (*segment).used == 0 {
     //       // free the segment (by forced reclaim) to make it available to other threads.
     //       // note1: we prefer to free a segment as that might lead to reclaiming another
     //       // segment that is still partially used.
     //       // note2: we could in principle optimize this by skipping reclaim and directly
     //       // freeing but that would violate some invariants temporarily)
-    //       mi_segment_reclaim(segment, heap, 0, NULL, tld);
+    //       mi_segment_reclaim(segment, heap, 0, ptr::null_mut(), tld);
     //     }
     //     else if (has_page && is_suitable) {
     //       // found a large enough free span, or a page of the right block_size with free space
@@ -278,15 +279,16 @@ fn mi_segment_try_reclaim(
     //       // the segment due to concurrent frees (in which case `NULL` is returned).
     //       return mi_segment_reclaim(segment, heap, block_size, reclaimed, tld);
     //     }
-    //     else if (segment->abandoned_visits > 3 && is_suitable) {
+    //     else if (*segment).abandoned_visits > 3 && is_suitable {
     //       // always reclaim on 3rd visit to limit the abandoned queue length.
     //       mi_segment_reclaim(segment, heap, 0, NULL, tld);
     //     }
     //     else {
     //       // otherwise, push on the visited list so it gets not looked at too quickly again
-    //       mi_segment_delayed_decommit(segment, true /* force? */, tld->stats); // forced decommit if needed as we may not visit soon again
-    //       mi_abandoned_visited_push(segment);
+    //     //   mi_segment_delayed_decommit(segment, true /* force? */, (*tld).stats); // forced decommit if needed as we may not visit soon again
+    //     //   mi_abandoned_visited_push(segment);
     //     }
+    //   }
     //   }
     ptr::null_mut()
 }
@@ -333,6 +335,106 @@ fn mi_segment_calculate_slices(
 ) -> usize {
     0
 }
+
+type MiTaggedSegment = u64;
+
+// // Pop from the abandoned list
+// fn  mi_abandoned_pop() -> *mut MiSegment {
+//     let segment;
+//     // Check efficiently if it is empty (or if the visited list needs to be moved)
+//     let ts = mi_atomic_load_relaxed(&abandoned);
+//     segment = mi_tagged_segment_ptr(ts);
+//     if mi_likely(segment == NULL) {
+//       if mi_likely(!mi_abandoned_visited_revisit()) { // try to swap in the visited list on NULL
+//         return NULL;
+//       }
+//     }
+
+//     // Do a pop. We use a reader count to prevent
+//     // a segment to be decommitted while a read is still pending,
+//     // and a tagged pointer to prevent A-B-A link corruption.
+//     // (this is called from `region.c:_mi_mem_free` for example)
+//     mi_atomic_increment_relaxed(&abandoned_readers);  // ensure no segment gets decommitted
+//     mi_tagged_segment_t next = 0;
+//     ts = mi_atomic_load_acquire(&abandoned);
+//     do {
+//       segment = mi_tagged_segment_ptr(ts);
+//       if (segment != NULL) {
+//         mi_segment_t* anext = mi_atomic_load_ptr_relaxed(mi_segment_t, &segment->abandoned_next);
+//         next = mi_tagged_segment(anext, ts); // note: reads the segment's `abandoned_next` field so should not be decommitted
+//       }
+//     } while (segment != NULL && !mi_atomic_cas_weak_acq_rel(&abandoned, &ts, next));
+//     mi_atomic_decrement_relaxed(&abandoned_readers);  // release reader lock
+//     if (segment != NULL) {
+//       mi_atomic_store_ptr_release(mi_segment_t, &segment->abandoned_next, NULL);
+//       mi_atomic_decrement_relaxed(&abandoned_count);
+//     }
+//     return segment;
+//   }
+
+// Reclaim an abandoned segment; returns NULL if the segment was freed
+// set `right_page_reclaimed` to `true` if it reclaimed a page of the right `block_size` that was not full.
+// static mi_segment_t* mi_segment_reclaim(mi_segment_t* segment, mi_heap_t* heap, size_t requested_block_size, bool* right_page_reclaimed, mi_segments_tld_t* tld) {
+//     mi_assert_internal(mi_atomic_load_ptr_relaxed(mi_segment_t, &segment->abandoned_next) == NULL);
+//     mi_assert_expensive(mi_segment_is_valid(segment, tld));
+//     if (right_page_reclaimed != NULL) { *right_page_reclaimed = false; }
+
+//     segment->thread_id = _mi_thread_id();
+//     segment->abandoned_visits = 0;
+//     mi_segments_track_size((long)mi_segment_size(segment), tld);
+//     mi_assert_internal(segment->next == NULL);
+//     _mi_stat_decrease(&tld->stats->segments_abandoned, 1);
+
+//     // for all slices
+//     const mi_slice_t* end;
+//     mi_slice_t* slice = mi_slices_start_iterate(segment, &end);
+//     while (slice < end) {
+//       mi_assert_internal(slice->slice_count > 0);
+//       mi_assert_internal(slice->slice_offset == 0);
+//       if (mi_slice_is_used(slice)) {
+//         // in use: reclaim the page in our heap
+//         mi_page_t* page = mi_slice_to_page(slice);
+//         mi_assert_internal(!page->is_reset);
+//         mi_assert_internal(page->is_committed);
+//         mi_assert_internal(mi_page_thread_free_flag(page)==MI_NEVER_DELAYED_FREE);
+//         mi_assert_internal(mi_page_heap(page) == NULL);
+//         mi_assert_internal(page->next == NULL && page->prev==NULL);
+//         _mi_stat_decrease(&tld->stats->pages_abandoned, 1);
+//         segment->abandoned--;
+//         // set the heap again and allow delayed free again
+//         mi_page_set_heap(page, heap);
+//         _mi_page_use_delayed_free(page, MI_USE_DELAYED_FREE, true); // override never (after heap is set)
+//         _mi_page_free_collect(page, false); // ensure used count is up to date
+//         if (mi_page_all_free(page)) {
+//           // if everything free by now, free the page
+//           slice = mi_segment_page_clear(page, tld);   // set slice again due to coalesceing
+//         }
+//         else {
+//           // otherwise reclaim it into the heap
+//           _mi_page_reclaim(heap, page);
+//           if (requested_block_size == page->xblock_size && mi_page_has_any_available(page)) {
+//             if (right_page_reclaimed != NULL) { *right_page_reclaimed = true; }
+//           }
+//         }
+//       }
+//       else {
+//         // the span is free, add it to our page queues
+//         slice = mi_segment_span_free_coalesce(slice, tld); // set slice again due to coalesceing
+//       }
+//       mi_assert_internal(slice->slice_count>0 && slice->slice_offset==0);
+//       slice = slice + slice->slice_count;
+//     }
+
+//     mi_assert(segment->abandoned == 0);
+//     if (segment->used == 0) {  // due to page_clear
+//       mi_assert_internal(right_page_reclaimed == NULL || !(*right_page_reclaimed));
+//       mi_segment_free(segment, false, tld);
+//       return NULL;
+//     }
+//     else {
+//       return segment;
+//     }
+//   }
 
 // -------------------------------------------------------------------
 // commit mask

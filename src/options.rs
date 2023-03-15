@@ -76,3 +76,15 @@ pub fn mi_option_is_enabled(option: MiOption) -> bool {
     true
     // return mi_option_get(option) != 0;
 }
+
+pub fn mi_option_get_clamp(option: MiOption, min: i64, max: i64) -> i64 {
+    let x = mi_option_get(option);
+
+    if x < min {
+        min
+    } else if x > max {
+        max
+    } else {
+        x
+    }
+}
