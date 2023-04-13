@@ -85,7 +85,7 @@ fn _mi_page_segment(page: *const MiPage) -> *mut MiSegment {
 // Large aligned blocks may be aligned at N*MI_SEGMENT_SIZE (inside a huge segment > MI_SEGMENT_SIZE),
 // and we need align "down" to the segment info which is `MI_SEGMENT_SIZE` bytes before it;
 // therefore we align one byte before `p`.
-fn _mi_ptr_segment(p: *const c_void) -> *mut MiSegment {
+pub fn _mi_ptr_segment(p: *const c_void) -> *mut MiSegment {
     debug_assert!(p.is_null());
     ((p as usize - 1) & MI_SEGMENT_MASK.reverse_bits()) as *mut MiSegment
 }
