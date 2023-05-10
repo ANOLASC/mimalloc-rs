@@ -1,6 +1,8 @@
+use libc::uintptr_t;
+
 use crate::mimalloc_types::{
-    MiCommitMask, MiSegmentKind, MI_HUGE_BLOCK_SIZE, MI_SEGMENT_MASK, MI_SEGMENT_SIZE,
-    MI_SEGMENT_SLICE_SIZE, MI_SIZE_BITS,
+    MiCommitMask, MiSegmentKind, MI_HUGE_BLOCK_SIZE, MI_INTPTR_BITS, MI_SEGMENT_MASK,
+    MI_SEGMENT_SIZE, MI_SEGMENT_SLICE_SIZE, MI_SIZE_BITS,
 };
 use std::ffi::c_void;
 
@@ -63,7 +65,7 @@ pub fn mi_heap_is_initialized(heap: *const MiHeap) -> bool {
 }
 
 #[inline]
-fn _mi_ptr_cookie(p: *const c_void) -> usize {
+pub fn _mi_ptr_cookie(p: *const c_void) -> usize {
     // extern MiHeap _mi_heap_main;
     debug_assert!(get_mi_heap_main().cookie != 0);
     (p as usize) ^ get_mi_heap_main().cookie
@@ -200,3 +202,135 @@ pub fn _mi_divide_up(size: usize, divider: usize) -> usize {
 //     }
 //     return true;
 //   }
+
+// "bit scan reverse": Return index of the highest bit (or MI_INTPTR_BITS if `x` is zero)
+pub fn mi_bsr(x: uintptr_t) -> usize {
+    return if x == 0 {
+        MI_INTPTR_BITS
+    } else {
+        MI_INTPTR_BITS - 1 - mi_clz(x)
+    };
+}
+
+// #include <limits.h>       // LONG_MAX
+// #define MI_HAVE_FAST_BITSCAN
+fn mi_clz(x: uintptr_t) -> usize {
+    //   if x==0 {return MI_INTPTR_BITS;}
+    //   let idx;
+    // #[cfg(target_pointer_width = "64")]
+    // _BitScanReverse64(&idx, x);
+    // #[cfg(target_pointer_width = "32")]
+    // _BitScanReverse(&idx, x);
+    //   return ((MI_INTPTR_BITS - 1) - idx);
+
+    // TODO: it need compiler intrinsics support, cuz https://doc.rust-lang.org/std/intrinsics/fn.ctlz.html is nightly only api
+
+    0
+}
+fn mi_ctz(x: uintptr_t) -> usize {
+    //   if (x==0) return MI_INTPTR_BITS;
+    //   unsigned long idx;
+    // #if (INTPTR_MAX == LONG_MAX)
+    //   _BitScanForward(&idx, x);
+    // #else
+    //   _BitScanForward64(&idx, x);
+    // #endif
+    //   return idx;
+
+    0
+}
+
+// size of a segment
+pub fn mi_segment_size(segment: *const MiSegment) -> usize {
+    unsafe { (*segment).segment_slices as usize * MI_SEGMENT_SLICE_SIZE }
+
+    // return *(unsafe { *segment }).segment_slices * MI_SEGMENT_SLICE_SIZE;
+}
+
+//   static inline uint8_t* mi_segment_end(mi_segment_t* segment) {
+//     return (uint8_t*)segment + mi_segment_size(segment);
+//   }
+
+//   // Thread free access
+//   static inline mi_block_t* mi_page_thread_free(const mi_page_t* page) {
+//     return (mi_block_t*)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xthread_free) & ~3);
+//   }
+
+//   static inline mi_delayed_t mi_page_thread_free_flag(const mi_page_t* page) {
+//     return (mi_delayed_t)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xthread_free) & 3);
+//   }
+
+//   // Heap access
+//   static inline mi_heap_t* mi_page_heap(const mi_page_t* page) {
+//     return (mi_heap_t*)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xheap));
+//   }
+
+//   static inline void mi_page_set_heap(mi_page_t* page, mi_heap_t* heap) {
+//     mi_assert_internal(mi_page_thread_free_flag(page) != MI_DELAYED_FREEING);
+//     mi_atomic_store_release(&page->xheap,(uintptr_t)heap);
+//   }
+
+//   // Thread free flag helpers
+//   static inline mi_block_t* mi_tf_block(mi_thread_free_t tf) {
+//     return (mi_block_t*)(tf & ~0x03);
+//   }
+//   static inline mi_delayed_t mi_tf_delayed(mi_thread_free_t tf) {
+//     return (mi_delayed_t)(tf & 0x03);
+//   }
+//   static inline mi_thread_free_t mi_tf_make(mi_block_t* block, mi_delayed_t delayed) {
+//     return (mi_thread_free_t)((uintptr_t)block | (uintptr_t)delayed);
+//   }
+//   static inline mi_thread_free_t mi_tf_set_delayed(mi_thread_free_t tf, mi_delayed_t delayed) {
+//     return mi_tf_make(mi_tf_block(tf),delayed);
+//   }
+//   static inline mi_thread_free_t mi_tf_set_block(mi_thread_free_t tf, mi_block_t* block) {
+//     return mi_tf_make(block, mi_tf_delayed(tf));
+//   }
+
+//   // are all blocks in a page freed?
+//   // note: needs up-to-date used count, (as the `xthread_free` list may not be empty). see `_mi_page_collect_free`.
+//   static inline bool mi_page_all_free(const mi_page_t* page) {
+//     mi_assert_internal(page != NULL);
+//     return (page->used == 0);
+//   }
+
+//   // are there any available blocks?
+//   static inline bool mi_page_has_any_available(const mi_page_t* page) {
+//     mi_assert_internal(page != NULL && page->reserved > 0);
+//     return (page->used < page->reserved || (mi_page_thread_free(page) != NULL));
+//   }
+
+//   // are there immediately available blocks, i.e. blocks available on the free list.
+//   static inline bool mi_page_immediate_available(const mi_page_t* page) {
+//     mi_assert_internal(page != NULL);
+//     return (page->free != NULL);
+//   }
+
+//   // is more than 7/8th of a page in use?
+//   static inline bool mi_page_mostly_used(const mi_page_t* page) {
+//     if (page==NULL) return true;
+//     uint16_t frac = page->reserved / 8U;
+//     return (page->reserved - page->used <= frac);
+//   }
+
+//   static inline mi_page_queue_t* mi_page_queue(const mi_heap_t* heap, size_t size) {
+//     return &((mi_heap_t*)heap)->pages[_mi_bin(size)];
+//   }
+
+//   //-----------------------------------------------------------
+//   // Page flags
+//   //-----------------------------------------------------------
+//   static inline bool mi_page_is_in_full(const mi_page_t* page) {
+//     return page->flags.x.in_full;
+//   }
+
+//   static inline void mi_page_set_in_full(mi_page_t* page, bool in_full) {
+//     page->flags.x.in_full = in_full;
+//   }
+
+//   static inline bool mi_page_has_aligned(const mi_page_t* page) {
+//     return page->flags.x.has_aligned;
+//   }
+
+//   static inline void mi_page_set_has_aligned(mi_page_t* page, bool has_aligned) {
+//     page->flags.x.has_aligned = has_aligned;
