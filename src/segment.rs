@@ -244,7 +244,7 @@ fn mi_segment_os_alloc(
         (*segment).mem_alignment = alignment;
         (*segment).mem_align_offset = align_offset;
     }
-    mi_segments_track_size(segment_size, tld);
+    mi_segments_track_size(segment_size as i32, tld);
     _mi_segment_map_allocated_at(segment);
     return segment;
 }
@@ -611,11 +611,32 @@ We keep a small segment cache per thread to increase local
 reuse and avoid setting/clearing guard pages in secure mode.
 ------------------------------------------------------------------------------- */
 
-fn mi_segments_track_size(segment_size: usize, tld: *mut MiSegmentsTLD) {
+fn mi_segments_track_size(segment_size: i32, tld: *mut MiSegmentsTLD) {
     // if (segment_size>=0) _mi_stat_increase(&tld->stats->segments,1);
     //                 else _mi_stat_decrease(&tld->stats->segments,1);
-    // tld->count += (segment_size >= 0 ? 1 : -1);
-    // if (tld->count > tld->peak_count) tld->peak_count = tld->count;
-    // tld->current_size += segment_size;
-    // if (tld->current_size > tld->peak_size) tld->peak_size = tld->current_size;
+    unsafe {
+        if segment_size >= 0 {
+            (*tld).count += 1
+        } else {
+            (*tld).count -= 1
+        };
+        if (*tld).count > (*tld).peak_count {
+            (*tld).peak_count = (*tld).count;
+        }
+        (*tld).current_size += segment_size as u64;
+        if (*tld).current_size > (*tld).peak_size {
+            (*tld).peak_size = (*tld).current_size;
+        }
+    }
+}
+
+pub fn mi_segments_page_find_and_allocate(
+    slice_count: usize,
+    req_arena_id: MiArenaIdT,
+    tld: MiSegmentsTLD,
+) -> *mut MiPage {
+    debug_assert!(slice_count * MI_SEGMENT_SLICE_SIZE <= MI_LARGE_OBJ_SIZE_MAX);
+    // search from best fit up
+
+    ptr::null_mut()
 }
